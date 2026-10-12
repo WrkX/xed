@@ -15520,6 +15520,136 @@ async fn test_uncommitted_diff_for_buffer(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_stage_selected_single_line_from_a_hunk(cx: &mut gpui::TestAppContext) {
+    init_test(cx);
+
+    let committed_contents = "old_a\nold_b\nold_c\nold_d\nold_e\nold_f\n";
+    let worktree_contents = "new_a\nnew_b\nnew_c\nnew_d\nnew_e\nnew_f\n";
+    let fs = FakeFs::new(cx.background_executor.clone());
+    fs.insert_tree(
+        "/dir",
+        json!({
+            ".git": {},
+            "file.txt": worktree_contents
+        }),
+    )
+    .await;
+    fs.set_head_and_index_for_repo(
+        path!("/dir/.git").as_ref(),
+        &[("file.txt", committed_contents.into())],
+    );
+
+    let project = Project::test(fs, ["/dir".as_ref()], cx).await;
+    let buffer = project
+        .update(cx, |project, cx| {
+            project.open_local_buffer("/dir/file.txt", cx)
+        })
+        .await
+        .unwrap();
+    let uncommitted_diff = project
+        .update(cx, |project, cx| {
+            project.open_uncommitted_diff(buffer.clone(), cx)
+        })
+        .await
+        .unwrap();
+    let buffer_snapshot = buffer.read_with(cx, |buffer, _| buffer.snapshot());
+    let selected_line = buffer_snapshot.anchor_before(Point::new(2, 0))
+        ..buffer_snapshot.anchor_before(Point::new(3, 0));
+
+    project
+        .update(cx, |project, cx| {
+            let unstaged_diff = uncommitted_diff.read(cx).secondary_diff().unwrap();
+            project.stage_selected_ranges(
+                buffer.clone(),
+                unstaged_diff,
+                vec![selected_line.clone()],
+                cx,
+            )
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    assert_eq!(
+        buffer.read_with(cx, |buffer, _| buffer.text()),
+        worktree_contents
+    );
+    let (staged_diff, index_text_buffer) = project
+        .update(cx, |project, cx| {
+            project.open_staged_diff(buffer.clone(), cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+
+    assert_eq!(
+        index_text_buffer.read_with(cx, |buffer, _| buffer.text()),
+        "old_a\nold_b\nnew_c\nold_d\nold_e\nold_f\n"
+    );
+    staged_diff.read_with(cx, |diff, cx| {
+        let snapshot = diff.snapshot(cx);
+        let buffer_snapshot = snapshot.buffer_snapshot();
+        assert_hunks(
+            snapshot.hunks(buffer_snapshot),
+            buffer_snapshot,
+            &diff.base_text_string(cx).unwrap(),
+            &[(2..3, "old_c\n", "new_c\n", DiffHunkStatus::modified_none())],
+        );
+    });
+
+    project
+        .update(cx, |project, cx| {
+            project.unstage_selected_ranges(
+                buffer.clone(),
+                uncommitted_diff.clone(),
+                vec![selected_line.clone()],
+                cx,
+            )
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    assert_eq!(
+        index_text_buffer.read_with(cx, |buffer, _| buffer.text()),
+        committed_contents
+    );
+    assert_eq!(
+        buffer.read_with(cx, |buffer, _| buffer.text()),
+        worktree_contents
+    );
+    staged_diff.read_with(cx, |diff, cx| {
+        let snapshot = diff.snapshot(cx);
+        assert!(snapshot.hunks(snapshot.buffer_snapshot()).next().is_none());
+    });
+
+    project
+        .update(cx, |project, cx| {
+            let unstaged_diff = uncommitted_diff.read(cx).secondary_diff().unwrap();
+            project.stage_selected_ranges(buffer.clone(), unstaged_diff, vec![selected_line], cx)
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    let index_snapshot = index_text_buffer.read_with(cx, |buffer, _| buffer.text_snapshot());
+    let selected_index_line = index_snapshot.anchor_before(Point::new(2, 0))
+        ..index_snapshot.anchor_before(Point::new(3, 0));
+    project
+        .update(cx, |project, cx| {
+            project.unstage_staged_selected_ranges(
+                staged_diff.clone(),
+                vec![selected_index_line],
+                cx,
+            )
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    assert_eq!(
+        index_text_buffer.read_with(cx, |buffer, _| buffer.text()),
+        committed_contents
+    );
+}
+
+#[gpui::test]
 async fn test_staging_hunks(cx: &mut gpui::TestAppContext) {
     use DiffHunkSecondaryStatus::*;
     init_test(cx);

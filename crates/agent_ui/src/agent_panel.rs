@@ -83,7 +83,10 @@ use language::LanguageRegistry;
 use language_model::LanguageModelRegistry;
 use notifications::status_toast::StatusToast;
 use project::{Project, ProjectPath, Worktree};
-use settings::{NotifyWhenAgentWaiting, Settings, SettingsStore, update_settings_file};
+use settings::{
+    NotifyWhenAgentWaiting, Settings, SettingsStore, SidebarSide, ThreadsButtonLocation,
+    update_settings_file,
+};
 
 use search::{BufferSearchBar, buffer_search::Deploy as DeployBufferSearch};
 use terminal::Event as TerminalEvent;
@@ -1527,6 +1530,7 @@ impl AgentPanel {
 
         let _settings_subscription = cx.observe_global::<SettingsStore>(|this, cx| {
             this.cleanup_retained_threads(cx);
+            cx.notify();
         });
 
         cx.on_release(|this, cx| {
@@ -6168,6 +6172,39 @@ impl AgentPanel {
             }));
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
+        let threads_sidebar_button = (AgentSettings::get_global(cx).threads_button_location
+            == ThreadsButtonLocation::AgentPanel)
+            .then(|| {
+                let sidebar_state =
+                    window
+                        .root::<MultiWorkspace>()
+                        .flatten()
+                        .map(|multi_workspace| {
+                            let multi_workspace = multi_workspace.read(cx);
+                            (
+                                multi_workspace.sidebar_open(),
+                                multi_workspace.sidebar_side(cx),
+                            )
+                        });
+                let (sidebar_open, sidebar_side) = sidebar_state
+                    .unwrap_or_else(|| (false, AgentSettings::get_global(cx).sidebar_side()));
+                let icon_name = match (sidebar_side, sidebar_open) {
+                    (SidebarSide::Left, true) => IconName::ThreadsSidebarLeftOpen,
+                    (SidebarSide::Left, false) => IconName::ThreadsSidebarLeftClosed,
+                    (SidebarSide::Right, true) => IconName::ThreadsSidebarRightOpen,
+                    (SidebarSide::Right, false) => IconName::ThreadsSidebarRightClosed,
+                };
+
+                IconButton::new("toggle-threads-sidebar", icon_name)
+                    .icon_size(IconSize::Small)
+                    .toggle_state(sidebar_open)
+                    .tooltip(move |_, cx| {
+                        Tooltip::for_action("Toggle Threads Sidebar", &ToggleWorkspaceSidebar, cx)
+                    })
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(ToggleWorkspaceSidebar.boxed_clone(), cx);
+                    })
+            });
 
         let base_container = h_flex()
             .size_full()
@@ -6234,6 +6271,7 @@ impl AgentPanel {
                         .h_full()
                         .flex_none()
                         .gap_1()
+                        .when_some(threads_sidebar_button, |this, button| this.child(button))
                         .children(sandbox_status)
                         .when(can_create_entries, |this| this.child(new_thread_menu))
                         .child(full_screen_button)

@@ -38,7 +38,7 @@ use project::{
     trusted_worktrees::TrustedWorktrees,
 };
 use remote::RemoteConnectionOptions;
-use settings::{Settings as _, SettingsStore};
+use settings::{Settings as _, SettingsStore, UiLayout};
 
 use std::any::TypeId;
 use std::path::Path;
@@ -53,7 +53,9 @@ use ui::{
 use update_version::UpdateVersion;
 use util::ResultExt;
 use workspace::{
-    AccessibleMode, MultiWorkspace, ToggleWorktreeSecurity, Workspace,
+    AccessibleMode, MultiWorkspace, ToggleLeftDock, ToggleWorktreeSecurity, Workspace,
+    WorkspaceSettings,
+    dock::DockPosition,
     notifications::{NotifyResultExt, NotifyTaskExt as _},
 };
 
@@ -64,6 +66,54 @@ pub use onboarding_banner::restore_banner;
 const MAX_PROJECT_NAME_LENGTH: usize = 40;
 const MAX_BRANCH_NAME_LENGTH: usize = 40;
 const MAX_SHORT_SHA_LENGTH: usize = 8;
+const TERMINAL_PANEL_NAME: &str = "TerminalPanel";
+const AGENT_PANEL_NAME: &str = "AgentPanel";
+
+fn panel_state(workspace: &Workspace, panel_name: &str, cx: &App) -> (bool, bool) {
+    workspace
+        .all_docks()
+        .into_iter()
+        .find_map(|dock| {
+            let dock = dock.read(cx);
+            let panel = dock.panel_by_persistent_name(panel_name)?;
+            let enabled = panel.enabled(cx);
+            let visible = enabled
+                && dock.is_open()
+                && dock
+                    .active_panel()
+                    .is_some_and(|active_panel| active_panel.persistent_name() == panel_name);
+
+            Some((enabled, visible))
+        })
+        .unwrap_or_default()
+}
+
+fn toggle_panel(
+    workspace: &mut Workspace,
+    panel_name: &str,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    let target = workspace.all_docks().into_iter().find_map(|dock| {
+        let dock = dock.read(cx);
+        let panel = dock.panel_by_persistent_name(panel_name)?;
+        if !panel.enabled(cx) {
+            return None;
+        }
+
+        let is_visible = dock.is_open()
+            && dock
+                .active_panel()
+                .is_some_and(|active_panel| active_panel.persistent_name() == panel_name);
+        Some((dock.position(), is_visible, panel.toggle_action(window, cx)))
+    });
+
+    match target {
+        Some((position, true, _)) => workspace.toggle_dock(position, window, cx),
+        Some((_, false, action)) => window.dispatch_action(action, cx),
+        None => {}
+    }
+}
 
 fn linked_worktree_name_anchor<'a>(
     main_worktree_path: Option<&'a Path>,
@@ -240,6 +290,37 @@ impl Render for TitleBar {
         let title_bar_settings = *TitleBarSettings::get_global(cx);
         let button_layout = title_bar_settings.button_layout;
         let is_git_enabled = ProjectSettings::get_global(cx).git.enabled.status;
+        let vscode_mode = WorkspaceSettings::get_global(cx).ui_layout == UiLayout::VsCode;
+        let (
+            left_sidebar_visible,
+            terminal_available,
+            terminal_visible,
+            agent_available,
+            agent_visible,
+        ) = self
+            .workspace
+            .upgrade()
+            .map(|workspace| {
+                workspace.read_with(cx, |workspace, cx| {
+                    let left_sidebar_visible = workspace
+                        .dock_at_position(DockPosition::Left)
+                        .read(cx)
+                        .is_open();
+                    let (terminal_available, terminal_visible) =
+                        panel_state(workspace, TERMINAL_PANEL_NAME, cx);
+                    let (agent_available, agent_visible) =
+                        panel_state(workspace, AGENT_PANEL_NAME, cx);
+
+                    (
+                        left_sidebar_visible,
+                        terminal_available,
+                        terminal_visible,
+                        agent_available,
+                        agent_visible,
+                    )
+                })
+            })
+            .unwrap_or_default();
 
         let show_menus = show_menus(cx);
 
@@ -407,6 +488,68 @@ impl Render for TitleBar {
                 .when(TitleBarSettings::get_global(cx).show_user_menu, |this| {
                     this.child(self.render_user_menu_button(cx))
                 })
+                .when(vscode_mode, |this| {
+                    this.child(
+                        h_flex()
+                            .gap_0p5()
+                            .child(
+                                IconButton::new("vscode-left-sidebar", IconName::PanelLeft)
+                                    .icon_size(IconSize::Small)
+                                    .toggle_state(left_sidebar_visible)
+                                    .aria_label("Left Sidebar")
+                                    .tooltip(|_, cx| {
+                                        Tooltip::for_action(
+                                            "Toggle Left Sidebar",
+                                            &ToggleLeftDock,
+                                            cx,
+                                        )
+                                    })
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(ToggleLeftDock.boxed_clone(), cx);
+                                    }),
+                            )
+                            .child(
+                                IconButton::new("vscode-terminal", IconName::PanelBottom)
+                                    .icon_size(IconSize::Small)
+                                    .toggle_state(terminal_visible)
+                                    .disabled(!terminal_available)
+                                    .aria_label("Terminal")
+                                    .tooltip(Tooltip::text("Toggle Terminal"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.workspace
+                                            .update(cx, |workspace, cx| {
+                                                toggle_panel(
+                                                    workspace,
+                                                    TERMINAL_PANEL_NAME,
+                                                    window,
+                                                    cx,
+                                                );
+                                            })
+                                            .log_err();
+                                    })),
+                            )
+                            .child(
+                                IconButton::new("vscode-agent-panel", IconName::PanelRight)
+                                    .icon_size(IconSize::Small)
+                                    .toggle_state(agent_visible)
+                                    .disabled(!agent_available)
+                                    .aria_label("Agent Panel")
+                                    .tooltip(Tooltip::text("Toggle Agent Panel"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.workspace
+                                            .update(cx, |workspace, cx| {
+                                                toggle_panel(
+                                                    workspace,
+                                                    AGENT_PANEL_NAME,
+                                                    window,
+                                                    cx,
+                                                );
+                                            })
+                                            .log_err();
+                                    })),
+                            ),
+                    )
+                })
                 .into_any_element(),
         );
 
@@ -505,6 +648,18 @@ impl TitleBar {
             ));
         }
         subscriptions.push(cx.observe_button_layout_changed(window, |_, _, cx| cx.notify()));
+        subscriptions.push(cx.observe_global::<SettingsStore>(|_, cx| cx.notify()));
+        for position in [
+            DockPosition::Left,
+            DockPosition::Bottom,
+            DockPosition::Right,
+        ] {
+            subscriptions.push(
+                cx.observe(workspace.dock_at_position(position), |_, _, cx| {
+                    cx.notify();
+                }),
+            );
+        }
         if let Some(trusted_worktrees) = TrustedWorktrees::try_get_global(cx) {
             subscriptions.push(cx.subscribe(&trusted_worktrees, |_, _, _, cx| {
                 cx.notify();

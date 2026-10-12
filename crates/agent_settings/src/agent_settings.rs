@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use settings::{
     DockPosition, DockSide, IntoGpui, LanguageModelParameters, LanguageModelSelection,
     NotifyWhenAgentWaiting, PlaySoundWhenAgentDone, RegisterSetting, Settings, SettingsContent,
-    SettingsStore, SidebarDockPosition, SidebarSide, ThinkingBlockDisplay, ToolPermissionMode,
-    update_settings_file, update_settings_file_with_completion,
+    SettingsStore, SidebarDockPosition, SidebarSide, ThinkingBlockDisplay, ThreadsButtonLocation,
+    ToolPermissionMode, update_settings_file, update_settings_file_with_completion,
 };
 use util::ResultExt as _;
 
@@ -211,6 +211,7 @@ fn parse_auto_compact_threshold(raw: &str) -> anyhow::Result<AutoCompactThreshol
 pub struct AgentSettings {
     pub enabled: bool,
     pub button: bool,
+    pub threads_button_location: ThreadsButtonLocation,
     pub dock: DockPosition,
     pub flexible: bool,
     pub max_idle_retained_threads: usize,
@@ -773,6 +774,7 @@ impl Settings for AgentSettings {
         Self {
             enabled: agent.enabled.unwrap(),
             button: agent.button.unwrap(),
+            threads_button_location: agent.threads_button_location.unwrap(),
             dock: agent.dock.unwrap(),
             max_idle_retained_threads: agent.max_idle_retained_threads.unwrap(),
             threads_sidebar: ThreadsSidebarSettings {
@@ -1201,6 +1203,44 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[gpui::test]
+    fn test_threads_button_location_setting(cx: &mut gpui::App) {
+        let store = SettingsStore::test(cx);
+        cx.set_global(store);
+        project::DisableAiSettings::register(cx);
+        AgentSettings::register(cx);
+
+        for (value, expected) in [
+            ("default", ThreadsButtonLocation::Default),
+            ("agent_panel", ThreadsButtonLocation::AgentPanel),
+            ("hidden", ThreadsButtonLocation::Hidden),
+        ] {
+            SettingsStore::update_global(cx, |store, cx| {
+                store
+                    .set_user_settings(
+                        &format!(r#"{{"agent":{{"threads_button_location":"{value}"}}}}"#),
+                        cx,
+                    )
+                    .expect("user settings load");
+            });
+            assert_eq!(
+                AgentSettings::get_global(cx).threads_button_location,
+                expected,
+                "{value}"
+            );
+        }
+
+        SettingsStore::update_global(cx, |store, cx| {
+            store
+                .set_user_settings(r#"{"agent":{"threads_button_location":null}}"#, cx)
+                .expect("user settings load");
+        });
+        assert_eq!(
+            AgentSettings::get_global(cx).threads_button_location,
+            ThreadsButtonLocation::Default
+        );
     }
 
     #[gpui::test]

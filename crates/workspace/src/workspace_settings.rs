@@ -15,6 +15,7 @@ use settings::{CommandAliasTarget, SettingsStore};
 pub struct WorkspaceSettings {
     pub active_pane_modifiers: ActivePanelModifiers,
     pub bottom_dock_layout: settings::BottomDockLayout,
+    pub ui_layout: settings::UiLayout,
     pub pane_split_direction_horizontal: settings::PaneSplitDirectionHorizontal,
     pub pane_split_direction_vertical: settings::PaneSplitDirectionVertical,
     pub centered_layout: settings::CenteredLayoutSettings,
@@ -114,6 +115,7 @@ impl Settings for WorkspaceSettings {
                 ),
             },
             bottom_dock_layout: workspace.bottom_dock_layout.unwrap(),
+            ui_layout: workspace.ui_layout.unwrap(),
             pane_split_direction_horizontal: workspace.pane_split_direction_horizontal.unwrap(),
             pane_split_direction_vertical: workspace.pane_split_direction_vertical.unwrap(),
             centered_layout: workspace.centered_layout.unwrap(),

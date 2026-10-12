@@ -14,7 +14,7 @@ use gpui::{
     px,
 };
 use serde::{Deserialize, Serialize};
-use settings::{Settings, SettingsStore, TerminalDockPosition};
+use settings::{Settings, SettingsStore, TerminalDockPosition, UiLayout};
 use std::sync::Arc;
 use ui::{
     ContextMenu, CountBadge, Divider, DividerColor, IconButton, Tooltip, prelude::*,
@@ -534,6 +534,13 @@ impl Dock {
         self.panel_entries
             .iter()
             .position(|entry| entry.panel.persistent_name() == ui_name)
+    }
+
+    pub fn panel_by_persistent_name(&self, panel_name: &str) -> Option<Arc<dyn PanelHandle>> {
+        self.panel_entries
+            .iter()
+            .find(|entry| entry.panel.persistent_name() == panel_name)
+            .map(|entry| entry.panel.clone())
     }
 
     pub fn panel_index_for_proto_id(&self, panel_id: PanelId) -> Option<usize> {
@@ -1571,13 +1578,13 @@ impl Render for PanelButtons {
 
         h_flex()
             .gap_1()
+            .children(buttons)
             .when(
                 has_buttons
                     && (dock.position == DockPosition::Bottom
                         || dock.position == DockPosition::Right),
                 |this| this.child(Divider::vertical().color(DividerColor::Border)),
             )
-            .children(buttons)
             .when(has_buttons && dock.position == DockPosition::Left, |this| {
                 this.child(Divider::vertical().color(DividerColor::Border))
             })
@@ -1598,6 +1605,13 @@ impl StatusItemView for PanelButtons {
         // Panel buttons are hidden on a per-panel basis through each panel
         // button's own context menu.
         None
+    }
+
+    fn should_render(&self, cx: &App) -> bool {
+        let dock = self.dock.read(cx);
+        dock.position != DockPosition::Left
+            || dock.is_open
+            || WorkspaceSettings::get_global(cx).ui_layout != UiLayout::VsCode
     }
 }
 

@@ -321,6 +321,15 @@ pub fn deploy_context_menu(
                     "Copy Permalink to Line",
                     Box::new(CopyPermalinkToLine),
                 )
+                .when(has_git_repo && has_selections, |builder| {
+                    builder
+                        .separator()
+                        .action("Stage Selected Ranges", Box::new(git::StageSelectedRanges))
+                        .action(
+                            "Unstage Selected Ranges",
+                            Box::new(git::UnstageSelectedRanges),
+                        )
+                })
                 .action_disabled_when(
                     !has_git_repo,
                     "View File History",

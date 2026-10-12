@@ -1066,6 +1066,7 @@ impl VsCodeSettings {
                 _ => None,
             }),
             bottom_dock_layout: None,
+            ui_layout: None,
             centered_layout: None,
             cli_default_open_behavior: None,
             default_open_behavior: None,

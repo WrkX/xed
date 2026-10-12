@@ -5098,9 +5098,23 @@ fn window_and_layout_page() -> SettingsPage {
         ]
     }
 
-    fn layout_section() -> [SettingsPageItem; 6] {
+    fn layout_section() -> [SettingsPageItem; 7] {
         [
             SettingsPageItem::SectionHeader("Layout"),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "UI Layout",
+                description: "Choose the original Zed layout or the VS Code style panel controls.",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("ui_layout"),
+                    pick: |settings_content| settings_content.workspace.ui_layout.as_ref(),
+                    write: |settings_content, value, _| {
+                        settings_content.workspace.ui_layout = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Bottom Dock Layout",
                 description: "Layout mode for the bottom dock.",
@@ -8729,7 +8743,7 @@ fn collaboration_page() -> SettingsPage {
 }
 
 fn ai_page(cx: &App) -> SettingsPage {
-    fn general_section() -> [SettingsPageItem; 8] {
+    fn general_section() -> [SettingsPageItem; 9] {
         [
             SettingsPageItem::SectionHeader("General"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -8766,6 +8780,29 @@ fn ai_page(cx: &App) -> SettingsPage {
                             .agent
                             .get_or_insert_default()
                             .set_threads_sidebar_position(value);
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Threads Sidebar Button Location",
+                description: "Where to show the button that opens the Threads Sidebar.",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("agent.threads_button_location"),
+                    pick: |settings_content| {
+                        settings_content
+                            .agent
+                            .as_ref()?
+                            .threads_button_location
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .agent
+                            .get_or_insert_default()
+                            .threads_button_location = value;
                     },
                 }),
                 metadata: None,

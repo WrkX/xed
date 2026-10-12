@@ -114,6 +114,8 @@ pub(super) enum DisplayDiffHunk {
     },
     Unfolded {
         is_created_file: bool,
+        buffer_id: text::BufferId,
+        buffer_range: Range<text::Anchor>,
         diff_base_byte_range: Range<usize>,
         display_row_range: Range<DisplayRow>,
         multi_buffer_range: Range<Anchor>,
@@ -1619,6 +1621,142 @@ impl Editor {
         self.do_stage_or_unstage_and_next(true, window, cx);
     }
 
+    pub(super) fn stage_selected_ranges(
+        &mut self,
+        _: &::git::StageSelectedRanges,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let ranges = self
+            .selections
+            .disjoint_anchor_ranges()
+            .filter(|range| range.start != range.end)
+            .collect::<Vec<_>>();
+        if ranges.is_empty() {
+            return;
+        }
+
+        let save_task = self.save_buffers_for_ranges_if_needed(&ranges, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            save_task.await?;
+            this.update_in(cx, |this, _window, cx| {
+                let multibuffer = this.buffer.read(cx);
+                let snapshot = multibuffer.snapshot(cx);
+                let mut ranges_by_buffer =
+                    HashMap::<text::BufferId, Vec<Range<text::Anchor>>>::default();
+
+                for range in ranges {
+                    let range = range.to_offset(&snapshot);
+                    for (buffer_snapshot, buffer_range, _) in snapshot.range_to_buffer_ranges(range)
+                    {
+                        ranges_by_buffer
+                            .entry(buffer_snapshot.remote_id())
+                            .or_default()
+                            .push(
+                                buffer_snapshot.anchor_before(buffer_range.start.0)
+                                    ..buffer_snapshot.anchor_after(buffer_range.end.0),
+                            );
+                    }
+                }
+
+                let mut stage_operations = Vec::new();
+                for (buffer_id, buffer_ranges) in ranges_by_buffer {
+                    let Some(diff) = multibuffer.diff_for(buffer_id) else {
+                        continue;
+                    };
+                    let diff_snapshot = diff.read(cx).snapshot(cx);
+                    if diff_snapshot.buffer_id() != buffer_id {
+                        continue;
+                    }
+                    let Some(operations) = diff.read(cx).operations() else {
+                        continue;
+                    };
+                    if !operations.supports_staging() {
+                        continue;
+                    }
+                    let Some(buffer) = multibuffer.buffer(buffer_id) else {
+                        continue;
+                    };
+                    stage_operations.push((operations, diff, buffer, buffer_ranges));
+                }
+                drop(snapshot);
+
+                for (operations, diff, buffer, buffer_ranges) in stage_operations {
+                    operations.stage_selected_ranges(diff, Some(buffer), buffer_ranges, cx);
+                }
+            })
+        })
+        .detach_and_log_err(cx);
+    }
+
+    pub(super) fn unstage_selected_ranges(
+        &mut self,
+        _: &::git::UnstageSelectedRanges,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let ranges = self
+            .selections
+            .disjoint_anchor_ranges()
+            .filter(|range| range.start != range.end)
+            .collect::<Vec<_>>();
+        if ranges.is_empty() {
+            return;
+        }
+
+        let save_task = self.save_buffers_for_ranges_if_needed(&ranges, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            save_task.await?;
+            this.update_in(cx, |this, _window, cx| {
+                let multibuffer = this.buffer.read(cx);
+                let snapshot = multibuffer.snapshot(cx);
+                let mut ranges_by_buffer =
+                    HashMap::<text::BufferId, Vec<Range<text::Anchor>>>::default();
+
+                for range in ranges {
+                    let range = range.to_offset(&snapshot);
+                    for (buffer_snapshot, buffer_range, _) in snapshot.range_to_buffer_ranges(range)
+                    {
+                        ranges_by_buffer
+                            .entry(buffer_snapshot.remote_id())
+                            .or_default()
+                            .push(
+                                buffer_snapshot.anchor_before(buffer_range.start.0)
+                                    ..buffer_snapshot.anchor_after(buffer_range.end.0),
+                            );
+                    }
+                }
+
+                let mut unstage_operations = Vec::new();
+                for (buffer_id, buffer_ranges) in ranges_by_buffer {
+                    let Some(diff) = multibuffer.diff_for(buffer_id) else {
+                        continue;
+                    };
+                    let diff_snapshot = diff.read(cx).snapshot(cx);
+                    if diff_snapshot.buffer_id() != buffer_id {
+                        continue;
+                    }
+                    let Some(operations) = diff.read(cx).operations() else {
+                        continue;
+                    };
+                    if !operations.supports_unstaging() {
+                        continue;
+                    }
+                    let Some(buffer) = multibuffer.buffer(buffer_id) else {
+                        continue;
+                    };
+                    unstage_operations.push((operations, diff, buffer, buffer_ranges));
+                }
+                drop(snapshot);
+
+                for (operations, diff, buffer, buffer_ranges) in unstage_operations {
+                    operations.unstage_selected_ranges(diff, Some(buffer), buffer_ranges, cx);
+                }
+            })
+        })
+        .detach_and_log_err(cx);
+    }
+
     pub(super) fn unstage_and_next(
         &mut self,
         _: &::git::UnstageAndNext,
@@ -2974,6 +3112,8 @@ impl EditorSnapshot {
 
                     DisplayDiffHunk::Unfolded {
                         status: hunk.status(),
+                        buffer_id: hunk.buffer_id,
+                        buffer_range: hunk.buffer_range,
                         diff_base_byte_range: hunk.diff_base_byte_range.start.0
                             ..hunk.diff_base_byte_range.end.0,
                         word_diffs: hunk.word_diffs,

@@ -1979,8 +1979,13 @@ impl Workspace {
             .flatten()
             .map(|mw| mw.downgrade());
         let status_bar = cx.new(|cx| {
-            let mut status_bar =
-                StatusBar::new(&center_pane.clone(), multi_workspace.clone(), window, cx);
+            let mut status_bar = StatusBar::new(
+                &center_pane.clone(),
+                left_dock.clone(),
+                multi_workspace.clone(),
+                window,
+                cx,
+            );
             status_bar.add_left_item(left_dock_buttons, window, cx);
             status_bar.add_right_item(right_dock_buttons, window, cx);
             status_bar.add_right_item(bottom_dock_buttons, window, cx);

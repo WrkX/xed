@@ -36,6 +36,32 @@ pub enum SidebarDockPosition {
     Right,
 }
 
+/// Where to show the Threads Sidebar button.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadsButtonLocation {
+    /// Show the button in its original location in the status bar.
+    #[default]
+    Default,
+    /// Show the button in the Agent Panel toolbar.
+    AgentPanel,
+    /// Hide the button.
+    Hidden,
+}
+
 #[with_fallible_options]
 #[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema, MergeFrom, Debug, Default)]
 pub struct ThreadsSidebarSettingsContent {
@@ -225,6 +251,10 @@ pub struct AgentSettingsContent {
     ///
     /// Default: true
     pub button: Option<bool>,
+    /// Where to show the Threads Sidebar button.
+    ///
+    /// Default: default
+    pub threads_button_location: Option<ThreadsButtonLocation>,
     /// Where to dock the agent panel.
     ///
     /// Default: left (Agentic layout), right (Classic layout)

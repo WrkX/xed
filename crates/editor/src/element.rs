@@ -647,6 +647,8 @@ impl EditorElement {
         }
         register_action(editor, window, Editor::toggle_selected_diff_hunks);
         register_action(editor, window, Editor::toggle_staged_selected_diff_hunks);
+        register_action(editor, window, Editor::stage_selected_ranges);
+        register_action(editor, window, Editor::unstage_selected_ranges);
         register_action(editor, window, Editor::stage_and_next);
         register_action(editor, window, Editor::unstage_and_next);
         register_action(editor, window, Editor::expand_all_diff_hunks);
@@ -5330,6 +5332,76 @@ impl EditorElement {
         }
     }
 
+    fn unstaged_display_hunks_for(
+        &self,
+        hunk: &DisplayDiffHunk,
+        snapshot: &EditorSnapshot,
+        cx: &App,
+    ) -> Vec<DisplayDiffHunk> {
+        let DisplayDiffHunk::Unfolded {
+            buffer_id,
+            buffer_range,
+            ..
+        } = hunk
+        else {
+            return Vec::new();
+        };
+        let multibuffer_snapshot = snapshot.buffer_snapshot();
+        let Some(diff) = self.editor.read(cx).buffer().read(cx).diff_for(*buffer_id) else {
+            return Vec::new();
+        };
+        let diff_snapshot = diff.read(cx).snapshot(cx);
+        let Some(secondary_snapshot) = diff_snapshot.secondary_diff() else {
+            return Vec::new();
+        };
+        let Some(buffer_snapshot) = multibuffer_snapshot.buffer_for_id(*buffer_id) else {
+            return Vec::new();
+        };
+
+        let mut unstaged_hunks = Vec::new();
+        for secondary_hunk in
+            secondary_snapshot.hunks_intersecting_range(buffer_range.clone(), buffer_snapshot)
+        {
+            let Some(multi_buffer_range) =
+                multibuffer_snapshot.anchor_range_in_buffer(secondary_hunk.buffer_range.clone())
+            else {
+                continue;
+            };
+            let multi_buffer_range_points = multi_buffer_range.start.to_point(&multibuffer_snapshot)
+                ..multi_buffer_range.end.to_point(&multibuffer_snapshot);
+            let start_point = Point::new(multi_buffer_range_points.start.row, 0);
+            let end_point =
+                if multi_buffer_range_points.end.row > multi_buffer_range_points.start.row {
+                    let last_row = MultiBufferRow(multi_buffer_range_points.end.row - 1);
+                    Point::new(last_row.0, multibuffer_snapshot.line_len(last_row))
+                } else {
+                    multi_buffer_range_points.end
+                };
+            let display_start = snapshot.point_to_display_point(start_point, text::Bias::Left);
+            let display_end = snapshot.point_to_display_point(end_point, text::Bias::Right);
+            let mut end_row = display_end.row();
+            if multi_buffer_range_points.end.row > multi_buffer_range_points.start.row
+                || display_end.column() > 0
+            {
+                end_row.0 += 1;
+            }
+
+            let mut status = secondary_hunk.status();
+            status.secondary = buffer_diff::DiffHunkSecondaryStatus::HasSecondaryHunk;
+            unstaged_hunks.push(DisplayDiffHunk::Unfolded {
+                is_created_file: false,
+                buffer_id: *buffer_id,
+                buffer_range: secondary_hunk.buffer_range,
+                diff_base_byte_range: secondary_hunk.diff_base_byte_range,
+                display_row_range: display_start.row()..end_row,
+                multi_buffer_range,
+                status,
+                word_diffs: Vec::new(),
+            });
+        }
+        unstaged_hunks
+    }
+
     fn paint_gutter_diff_hunks(
         &self,
         layout: &mut EditorLayout,
@@ -5341,9 +5413,31 @@ impl EditorElement {
             return;
         }
 
+        let mut display_hunks_to_paint = Vec::new();
+        for (hunk, hitbox) in &layout.display_hunks {
+            match hunk {
+                DisplayDiffHunk::Unfolded { status, .. }
+                    if status.secondary
+                        == buffer_diff::DiffHunkSecondaryStatus::OverlapsWithSecondaryHunk =>
+                {
+                    let mut staged_hunk = hunk.clone();
+                    if let DisplayDiffHunk::Unfolded { status, .. } = &mut staged_hunk {
+                        status.secondary = buffer_diff::DiffHunkSecondaryStatus::NoSecondaryHunk;
+                    }
+                    display_hunks_to_paint.push((staged_hunk, hitbox.as_ref()));
+                    display_hunks_to_paint.extend(
+                        self.unstaged_display_hunks_for(hunk, &layout.position_map.snapshot, cx)
+                            .into_iter()
+                            .map(|hunk| (hunk, hitbox.as_ref())),
+                    );
+                }
+                _ => display_hunks_to_paint.push((hunk.clone(), hitbox.as_ref())),
+            }
+        }
+
         let line_height = layout.position_map.line_height;
         window.paint_layer(layout.gutter_hitbox.bounds, |window| {
-            for (hunk, hitbox) in &layout.display_hunks {
+            for (hunk, hitbox) in &display_hunks_to_paint {
                 let hunk_to_paint = match hunk {
                     DisplayDiffHunk::Folded { .. } => {
                         let hunk_bounds = Self::diff_hunk_bounds(
@@ -5365,7 +5459,15 @@ impl EditorElement {
                         status,
                         display_row_range,
                         ..
-                    } => hitbox.as_ref().map(|hunk_hitbox| {
+                    } => hitbox.map(|_hunk_hitbox| {
+                        let hunk_bounds = Self::diff_hunk_bounds(
+                            layout.position_map.scroll_position,
+                            line_height,
+                            layout.gutter_hitbox.bounds,
+                            hunk,
+                            &layout.position_map.snapshot,
+                            cx,
+                        );
                         let color = match split_side {
                             Some(SplitSide::Left) => cx.theme().colors().version_control_deleted,
                             Some(SplitSide::Right) => cx.theme().colors().version_control_added,
@@ -5385,16 +5487,16 @@ impl EditorElement {
                             DiffHunkStatusKind::Deleted if display_row_range.is_empty() => (
                                 Bounds::new(
                                     point(
-                                        hunk_hitbox.origin.x - hunk_hitbox.size.width,
-                                        hunk_hitbox.origin.y,
+                                        hunk_bounds.origin.x - hunk_bounds.size.width,
+                                        hunk_bounds.origin.y,
                                     ),
-                                    size(hunk_hitbox.size.width * 2., hunk_hitbox.size.height),
+                                    size(hunk_bounds.size.width * 2., hunk_bounds.size.height),
                                 ),
                                 color,
                                 Corners::all(1. * line_height),
                                 *status,
                             ),
-                            _ => (hunk_hitbox.bounds, color, Corners::all(px(0.)), *status),
+                            _ => (hunk_bounds, color, Corners::all(px(0.)), *status),
                         }
                     }),
                 };

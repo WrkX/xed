@@ -88,6 +88,27 @@ Non-negative `float` values
 }
 ```
 
+## UI Layout {#ui-layout}
+
+- Description: Choose Zed's standard layout or VS Code-style panel controls.
+- Setting: `ui_layout`
+- Default: `"default"`
+
+**Options**
+
+- `"default"`: Use Zed's standard panel controls.
+- `"vscode"`: Show Left Sidebar, Terminal, and Agent Panel buttons in the title bar. Panel buttons in the left dock appear only while the dock is open.
+
+Open the Settings Editor and search for “UI Layout”. Or add this to your `settings.json`:
+
+```json [settings]
+{
+  "ui_layout": "vscode"
+}
+```
+
+See [VS Code-style panel controls](../migrate/vs-code.md#vscode-style-panel-controls) for how the buttons behave. This setting does not change your key bindings; configure [`base_keymap`](#base-keymap) separately.
+
 ## Agent Panel {#agent-panel}
 
 To configure panel sizing, open the Settings Editor and search for “Agent Panel Default Width” or “Agent Panel Flexible Sizing”.

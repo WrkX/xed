@@ -3386,6 +3386,51 @@ impl Project {
         })
     }
 
+    /// Stages only the changed lines covered by `worktree_ranges` in the worktree buffer.
+    pub fn stage_selected_ranges(
+        &mut self,
+        buffer: Entity<Buffer>,
+        unstaged_diff: Entity<BufferDiff>,
+        worktree_ranges: Vec<Range<Anchor>>,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        if self.is_disconnected(cx) {
+            return Err(anyhow!(ErrorCode::Disconnected));
+        }
+        self.git_store.update(cx, |git_store, cx| {
+            git_store.stage_selected_ranges(buffer, unstaged_diff, worktree_ranges, cx)
+        })
+    }
+
+    pub fn unstage_selected_ranges(
+        &mut self,
+        buffer: Entity<Buffer>,
+        uncommitted_diff: Entity<BufferDiff>,
+        worktree_ranges: Vec<Range<Anchor>>,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        if self.is_disconnected(cx) {
+            return Err(anyhow!(ErrorCode::Disconnected));
+        }
+        self.git_store.update(cx, |git_store, cx| {
+            git_store.unstage_selected_ranges(buffer, uncommitted_diff, worktree_ranges, cx)
+        })
+    }
+
+    pub fn unstage_staged_selected_ranges(
+        &mut self,
+        staged_diff: Entity<BufferDiff>,
+        index_ranges: Vec<Range<Anchor>>,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        if self.is_disconnected(cx) {
+            return Err(anyhow!(ErrorCode::Disconnected));
+        }
+        self.git_store.update(cx, |git_store, cx| {
+            git_store.unstage_staged_selected_ranges(staged_diff, index_ranges, cx)
+        })
+    }
+
     /// Unstages the worktree changes covered by `worktree_ranges` (in the worktree
     /// buffer's coordinates), acting on the given uncommitted diff. Used by the
     /// uncommitted (gutter) controls.

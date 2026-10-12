@@ -40,6 +40,22 @@ pub trait DiffOperations {
         _cx: &mut App,
     ) {
     }
+    fn stage_selected_ranges(
+        &self,
+        _diff: Entity<BufferDiff>,
+        _buffer: Option<Entity<language::Buffer>>,
+        _buffer_ranges: Vec<Range<Anchor>>,
+        _cx: &mut App,
+    ) {
+    }
+    fn unstage_selected_ranges(
+        &self,
+        _diff: Entity<BufferDiff>,
+        _buffer: Option<Entity<language::Buffer>>,
+        _buffer_ranges: Vec<Range<Anchor>>,
+        _cx: &mut App,
+    ) {
+    }
     fn unstage(
         &self,
         _diff: Entity<BufferDiff>,

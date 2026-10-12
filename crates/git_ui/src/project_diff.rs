@@ -8,15 +8,15 @@ use crate::{
 use anyhow::{Context as _, Result};
 use buffer_diff::DiffHunkSecondaryStatus;
 use editor::{
-    DefaultDiffHunkRenderer, Editor, EditorEvent, SplittableEditor,
-    actions::{GoToHunk, GoToPreviousHunk, SendReviewToAgent},
+    DefaultDiffHunkRenderer, Editor, EditorEvent, SelectionEffects, SplittableEditor,
+    actions::{GoToHunk, GoToPreviousHunk, SelectAll, SendReviewToAgent},
 };
 use git::{Commit, StageAll, StageAndNext, ToggleStaged, UnstageAll, UnstageAndNext};
 use gpui::{
     Action, App, AppContext as _, Entity, EventEmitter, FocusHandle, Focusable, Render,
     Subscription, Task, WeakEntity, actions,
 };
-use language::Capability;
+use language::{Anchor, Capability};
 use multi_buffer::MultiBuffer;
 use project::{
     Project, ProjectPath,
@@ -336,6 +336,54 @@ impl ProjectDiff {
         self.diff.read(cx).editor().clone()
     }
 
+    fn select_all_in_current_file(
+        &mut self,
+        _: &SelectAll,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let splittable_editor = self.diff.read(cx).editor().clone();
+        let lhs_editor = splittable_editor.read(cx).lhs_editor().cloned();
+        let editor = lhs_editor
+            .filter(|editor| {
+                editor
+                    .read(cx)
+                    .focus_handle(cx)
+                    .contains_focused(window, cx)
+            })
+            .unwrap_or_else(|| splittable_editor.read(cx).rhs_editor().clone());
+        let editor_focus_handle = editor.read(cx).focus_handle(cx);
+        if !editor_focus_handle.contains_focused(window, cx) {
+            return false;
+        }
+
+        let (multibuffer, editor_anchor) = editor.read_with(cx, |editor, _| {
+            (
+                editor.buffer().clone(),
+                editor.selections.newest_anchor().head(),
+            )
+        });
+        let snapshot = multibuffer.read(cx).snapshot(cx);
+        let Some((buffer_anchor, _)) = snapshot.anchor_to_buffer_anchor(editor_anchor) else {
+            return false;
+        };
+        let buffer_id = buffer_anchor.buffer_id;
+        let Some(range) = snapshot
+            .anchor_in_buffer(Anchor::min_for_buffer(buffer_id))
+            .zip(snapshot.anchor_in_buffer(Anchor::max_for_buffer(buffer_id)))
+            .map(|(start, end)| start..end)
+        else {
+            return false;
+        };
+
+        editor.update(cx, |editor, cx| {
+            editor.change_selections(SelectionEffects::no_scroll(), window, cx, |selections| {
+                selections.select_ranges([range]);
+            });
+        });
+        true
+    }
+
     /// Returns the multibuffer of the currently-shown diff view.
     pub fn multibuffer(&self, cx: &App) -> Entity<MultiBuffer> {
         self.diff.read(cx).multibuffer().clone()
@@ -584,8 +632,16 @@ impl Item for ProjectDiff {
 }
 
 impl Render for ProjectDiff {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().child(self.diff.clone())
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            // The editor handles SelectAll during bubbling, so Project Diff must intercept it first.
+            .capture_action(cx.listener(|this, action: &SelectAll, window, cx| {
+                if this.select_all_in_current_file(action, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .child(self.diff.clone())
     }
 }
 
@@ -1010,6 +1066,73 @@ mod tests {
 
     use super::*;
 
+    fn assert_selection_covers_buffer(
+        test_context: &mut EditorTestContext,
+        expected_buffer_id: language::BufferId,
+    ) {
+        test_context.update_editor(|editor, _, cx| {
+            let snapshot = editor.buffer().read(cx).snapshot(cx);
+            let selections = editor
+                .selections
+                .disjoint_anchor_ranges()
+                .collect::<Vec<_>>();
+            assert_eq!(selections.len(), 1);
+            let Some(selection) = selections.first() else {
+                panic!("Select All should leave one selection");
+            };
+            let Some((start, start_snapshot)) = snapshot.anchor_to_buffer_anchor(selection.start)
+            else {
+                panic!("selection start should resolve to a source buffer");
+            };
+            let Some((end, end_snapshot)) = snapshot.anchor_to_buffer_anchor(selection.end) else {
+                panic!("selection end should resolve to a source buffer");
+            };
+
+            assert_eq!(start.buffer_id, expected_buffer_id);
+
+            let excerpts = snapshot
+                .excerpts_for_buffer(expected_buffer_id)
+                .collect::<Vec<_>>();
+            let Some(first_excerpt) = excerpts.first() else {
+                panic!("selected file should have a displayed excerpt");
+            };
+            let Some(last_excerpt) = excerpts.last() else {
+                panic!("selected file should have a displayed excerpt");
+            };
+
+            assert_eq!(
+                language::ToOffset::to_offset(&start, start_snapshot),
+                language::ToOffset::to_offset(&first_excerpt.context.start, start_snapshot)
+            );
+
+            let all_excerpts = snapshot.excerpts().collect::<Vec<_>>();
+            let last_excerpt_index = all_excerpts
+                .iter()
+                .rposition(|excerpt| excerpt.context.start.buffer_id == expected_buffer_id)
+                .expect("selected file should have a displayed excerpt");
+            if let Some(next_excerpt) = all_excerpts.get(last_excerpt_index + 1) {
+                if end.buffer_id == next_excerpt.context.start.buffer_id {
+                    assert_eq!(
+                        language::ToOffset::to_offset(&end, end_snapshot),
+                        language::ToOffset::to_offset(&next_excerpt.context.start, end_snapshot)
+                    );
+                } else {
+                    assert_eq!(end.buffer_id, expected_buffer_id);
+                    assert_eq!(
+                        language::ToOffset::to_offset(&end, end_snapshot),
+                        language::ToOffset::to_offset(&last_excerpt.context.end, end_snapshot)
+                    );
+                }
+            } else {
+                assert_eq!(end.buffer_id, expected_buffer_id);
+                assert_eq!(
+                    language::ToOffset::to_offset(&end, end_snapshot),
+                    language::ToOffset::to_offset(&last_excerpt.context.end, end_snapshot)
+                );
+            }
+        });
+    }
+
     #[ctor::ctor(unsafe)]
     fn init_logger() {
         zlog::init_test();
@@ -1213,6 +1336,181 @@ mod tests {
                     .is_none()
             );
         });
+    }
+
+    #[gpui::test]
+    async fn test_select_all_in_project_diff_selects_only_the_current_file(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+
+        let unchanged_lines = (0..12)
+            .map(|line| format!("context {line}\n"))
+            .collect::<String>();
+        let previous_main = format!("old first\n{unchanged_lines}old last\n");
+        let current_main = format!("new first\n{unchanged_lines}new last\n");
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            path!("/project"),
+            json!({
+                ".git": {},
+                "a_main.rs": current_main.clone(),
+                "z_utils.rs": "utility new\n",
+            }),
+        )
+        .await;
+        fs.set_head_and_index_for_repo(
+            Path::new(path!("/project/.git")),
+            &[
+                ("a_main.rs", previous_main),
+                ("z_utils.rs", "utility old\n".to_owned()),
+            ],
+        );
+
+        let project = Project::test(fs.clone(), [Path::new(path!("/project"))], cx).await;
+        let (multi_workspace, cx) =
+            cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        cx.focus(&workspace);
+        cx.update(|window, cx| {
+            window.dispatch_action(project_diff::Diff.boxed_clone(), cx);
+        });
+        cx.run_until_parked();
+
+        let item = workspace.update(cx, |workspace, cx| {
+            workspace
+                .active_item_as::<ProjectDiff>(cx)
+                .expect("Project Diff should be active")
+        });
+        let editor = item.read_with(cx, |item, cx| item.editor(cx).read(cx).rhs_editor().clone());
+        let mut editor_context = EditorTestContext::for_editor_in(editor, cx).await;
+
+        let (main_buffer_id, main_excerpt_count) =
+            editor_context.update_editor(|editor, window, cx| {
+                let snapshot = editor.buffer().read(cx).snapshot(cx);
+                let first_excerpt = snapshot
+                    .excerpts()
+                    .next()
+                    .expect("diff should have excerpts");
+                let buffer_id = first_excerpt.context.start.buffer_id;
+                let cursor = snapshot
+                    .anchor_in_excerpt(first_excerpt.context.start)
+                    .expect("first excerpt start should be selectable");
+                editor.change_selections(Default::default(), window, cx, |selections| {
+                    selections.select_ranges([cursor..cursor]);
+                });
+                (buffer_id, snapshot.excerpts_for_buffer(buffer_id).count())
+            });
+        assert!(
+            main_excerpt_count >= 2,
+            "main.rs should have separate hunks"
+        );
+
+        editor_context.dispatch_action(editor::actions::CollapseAllDiffHunks);
+        editor_context.dispatch_action(SelectAll);
+        assert_selection_covers_buffer(&mut editor_context, main_buffer_id);
+        editor_context.dispatch_action(SelectAll);
+        assert_selection_covers_buffer(&mut editor_context, main_buffer_id);
+
+        let active_buffer_id = editor_context.update_editor(|editor, window, cx| {
+            let snapshot = editor.buffer().read(cx).snapshot(cx);
+            let mut buffer_ids = snapshot
+                .excerpts()
+                .map(|excerpt| excerpt.context.start.buffer_id)
+                .collect::<Vec<_>>();
+            buffer_ids.dedup();
+            let other_buffer_id = buffer_ids
+                .into_iter()
+                .find(|buffer_id| *buffer_id != main_buffer_id)
+                .expect("diff should contain another file");
+            let main_excerpt = snapshot
+                .excerpts_for_buffer(main_buffer_id)
+                .next()
+                .expect("main.rs should have an excerpt");
+            let other_excerpt = snapshot
+                .excerpts_for_buffer(other_buffer_id)
+                .next()
+                .expect("another file should have an excerpt");
+            let main_cursor = snapshot
+                .anchor_in_excerpt(main_excerpt.context.start)
+                .expect("main.rs excerpt start should be selectable");
+            let other_cursor = snapshot
+                .anchor_in_excerpt(other_excerpt.context.start)
+                .expect("other file excerpt start should be selectable");
+            editor.change_selections(Default::default(), window, cx, |selections| {
+                selections.select_ranges([main_cursor..main_cursor, other_cursor..other_cursor]);
+            });
+            snapshot
+                .anchor_to_buffer_anchor(editor.selections.newest_anchor().head())
+                .map(|(anchor, _)| anchor.buffer_id)
+                .expect("newest selection should resolve to a source buffer")
+        });
+        editor_context.dispatch_action(SelectAll);
+        assert_selection_covers_buffer(&mut editor_context, active_buffer_id);
+
+        let updated_main = format!("new first updated\n{unchanged_lines}new last updated\n");
+        fs.insert_file(path!("/project/a_main.rs"), updated_main.into_bytes())
+            .await;
+        editor_context.cx.run_until_parked();
+
+        let updated_buffer_id = editor_context.update_editor(|editor, window, cx| {
+            let snapshot = editor.buffer().read(cx).snapshot(cx);
+            let first_excerpt = snapshot
+                .excerpts()
+                .next()
+                .expect("updated diff has excerpts");
+            let buffer_id = first_excerpt.context.start.buffer_id;
+            assert!(
+                snapshot
+                    .buffer_for_id(buffer_id)
+                    .expect("updated file should be in the multibuffer")
+                    .text()
+                    .contains("new first updated")
+            );
+            let cursor = snapshot
+                .anchor_in_excerpt(first_excerpt.context.start)
+                .expect("updated excerpt start should be selectable");
+            editor.change_selections(Default::default(), window, cx, |selections| {
+                selections.select_ranges([cursor..cursor]);
+            });
+            buffer_id
+        });
+        editor_context.dispatch_action(SelectAll);
+        assert_selection_covers_buffer(&mut editor_context, updated_buffer_id);
+
+        editor_context.cx.update(|_, cx| {
+            cx.update_global::<SettingsStore, _>(|store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.editor.diff_view_style = Some(DiffViewStyle::Split);
+                });
+            });
+        });
+        editor_context.cx.run_until_parked();
+
+        let lhs_editor = item.read_with(&editor_context.cx, |item, cx| {
+            item.editor(cx)
+                .read(cx)
+                .lhs_editor()
+                .cloned()
+                .expect("split diff should have a left editor")
+        });
+        let mut lhs_context =
+            EditorTestContext::for_editor_in(lhs_editor, &mut editor_context.cx).await;
+        let lhs_buffer_id = lhs_context.update_editor(|editor, window, cx| {
+            let snapshot = editor.buffer().read(cx).snapshot(cx);
+            let first_excerpt = snapshot.excerpts().next().expect("left diff has excerpts");
+            let buffer_id = first_excerpt.context.start.buffer_id;
+            let cursor = snapshot
+                .anchor_in_excerpt(first_excerpt.context.start)
+                .expect("left excerpt start should be selectable");
+            editor.change_selections(Default::default(), window, cx, |selections| {
+                selections.select_ranges([cursor..cursor]);
+            });
+            buffer_id
+        });
+        lhs_context.dispatch_action(SelectAll);
+        assert_selection_covers_buffer(&mut lhs_context, lhs_buffer_id);
     }
 
     #[gpui::test]

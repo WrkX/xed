@@ -23,6 +23,10 @@ pub struct WorkspaceSettingsContent {
     ///
     /// Default: contained
     pub bottom_dock_layout: Option<BottomDockLayout>,
+    /// The overall interface layout mode.
+    ///
+    /// Default: default
+    pub ui_layout: Option<UiLayout>,
     /// Direction to split horizontally.
     ///
     /// Default: "up"
@@ -368,6 +372,31 @@ pub enum BottomDockLayout {
     LeftAligned,
     /// Extends under the right dock while snapping to the left dock
     RightAligned,
+}
+
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum UiLayout {
+    /// Use Zed's original interface layout.
+    #[default]
+    Default,
+    /// Show title-bar panel controls and hide left-dock buttons when closed.
+    #[serde(rename = "vscode")]
+    #[strum(serialize = "VS Code")]
+    VsCode,
 }
 
 #[derive(
@@ -1208,4 +1237,26 @@ impl DocumentSymbols {
 pub struct FocusFollowsMouse {
     pub enabled: Option<bool>,
     pub debounce_ms: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UiLayout;
+
+    #[test]
+    fn ui_layout_uses_the_configured_names() {
+        assert_eq!(
+            serde_json::to_string(&UiLayout::Default).expect("default layout should serialize"),
+            "\"default\""
+        );
+        assert_eq!(
+            serde_json::to_string(&UiLayout::VsCode).expect("VS Code layout should serialize"),
+            "\"vscode\""
+        );
+        assert_eq!(
+            serde_json::from_str::<UiLayout>("\"vscode\"")
+                .expect("VS Code layout should deserialize"),
+            UiLayout::VsCode
+        );
+    }
 }

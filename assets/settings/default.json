@@ -95,6 +95,9 @@
   // Layout mode of the bottom dock. Defaults to "contained"
   //   choices: contained, full, left_aligned, right_aligned
   "bottom_dock_layout": "contained",
+  // Overall interface layout mode. Defaults to "default".
+  //   choices: default, vscode
+  "ui_layout": "default",
   // The direction that you want to split panes horizontally. Defaults to "down"
   "pane_split_direction_horizontal": "down",
   // The direction that you want to split panes vertically. Defaults to "right"
@@ -1166,6 +1169,8 @@
     "enabled": true,
     // Whether to show the agent panel button in the status bar.
     "button": true,
+    // Where to show the Threads Sidebar button. Can be 'default', 'agent_panel' or 'hidden'.
+    "threads_button_location": "default",
     // Where to dock the agent panel. Can be 'left', 'right' or 'bottom'.
     "dock": "left",
     // Whether the agent panel should use flexible (proportional) sizing when docked

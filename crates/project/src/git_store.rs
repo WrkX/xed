@@ -216,6 +216,453 @@ fn pending_hunks(
         .collect()
 }
 
+fn line_offsets(text: &str) -> Vec<usize> {
+    let mut offsets = vec![0];
+    offsets.extend(
+        text.bytes()
+            .enumerate()
+            .filter_map(|(offset, byte)| (byte == b'\n').then_some(offset + 1)),
+    );
+    if offsets.last().copied() != Some(text.len()) {
+        offsets.push(text.len());
+    }
+    offsets
+}
+
+fn selected_index_edits(
+    unstaged_snapshot: &buffer_diff::BufferDiffSnapshot,
+    worktree_ranges: &[Range<Anchor>],
+    buffer_snapshot: &text::BufferSnapshot,
+) -> Result<Vec<(Range<usize>, Arc<str>)>> {
+    let base_text = unstaged_snapshot.base_text().text();
+    let mut selected_hunks: Vec<(DiffHunk, Vec<Range<usize>>, bool)> = Vec::new();
+
+    for worktree_range in worktree_ranges {
+        let selection = worktree_range.to_point(buffer_snapshot);
+        if selection.is_empty() {
+            continue;
+        }
+        let selected_start_row = selection.start.row as usize;
+        let selected_end_row = selection.end.row as usize + usize::from(selection.end.column > 0);
+
+        for hunk in
+            unstaged_snapshot.raw_hunks_intersecting_range(worktree_range.clone(), buffer_snapshot)
+        {
+            let new_text: String = buffer_snapshot
+                .text_for_range(hunk.buffer_range.clone())
+                .collect();
+            let new_offsets = line_offsets(&new_text);
+            let new_line_count = new_offsets.len().saturating_sub(1);
+            let hunk_start_row = hunk.range.start.row as usize;
+            let selected_hunk_index = selected_hunks.iter().position(|(selected_hunk, _, _)| {
+                selected_hunk.buffer_range.start == hunk.buffer_range.start
+            });
+            let selected_hunk = if let Some(index) = selected_hunk_index {
+                &mut selected_hunks[index]
+            } else {
+                selected_hunks.push((hunk.clone(), Vec::new(), false));
+                selected_hunks
+                    .last_mut()
+                    .context("selected hunk was not added")?
+            };
+
+            if new_line_count == 0 {
+                if selected_start_row <= hunk_start_row && hunk_start_row < selected_end_row {
+                    selected_hunk.2 = true;
+                }
+                continue;
+            }
+
+            let hunk_end_row = hunk_start_row + new_line_count;
+            let selected_start = selected_start_row.max(hunk_start_row);
+            let selected_end = selected_end_row.min(hunk_end_row);
+            if selected_start < selected_end {
+                selected_hunk
+                    .1
+                    .push(selected_start - hunk_start_row..selected_end - hunk_start_row);
+            }
+        }
+    }
+
+    let mut edits: Vec<(Range<usize>, Arc<str>)> = Vec::new();
+    for (hunk, mut selected_lines, deletion_selected) in selected_hunks {
+        selected_lines.sort_by_key(|range| range.start);
+        let mut merged_selected_lines: Vec<Range<usize>> = Vec::new();
+        for range in selected_lines {
+            if let Some(previous) = merged_selected_lines.last_mut()
+                && range.start <= previous.end
+            {
+                previous.end = previous.end.max(range.end);
+            } else {
+                merged_selected_lines.push(range);
+            }
+        }
+
+        let Some(base_chunk) = base_text.get(hunk.diff_base_byte_range.clone()) else {
+            bail!("diff base range is not valid UTF-8")
+        };
+        let old_offsets = line_offsets(base_chunk);
+        let old_line_count = old_offsets.len().saturating_sub(1);
+        let new_text: String = buffer_snapshot
+            .text_for_range(hunk.buffer_range.clone())
+            .collect();
+        let new_offsets = line_offsets(&new_text);
+        let new_line_count = new_offsets.len().saturating_sub(1);
+
+        if new_line_count == 0 {
+            if deletion_selected {
+                edits.push((hunk.diff_base_byte_range.clone(), Arc::from("")));
+            }
+        } else if old_line_count == 0 {
+            let mut replacement = String::new();
+            for range in merged_selected_lines {
+                let start = *new_offsets
+                    .get(range.start)
+                    .context("selected line start is outside the diff hunk")?;
+                let end = *new_offsets
+                    .get(range.end)
+                    .context("selected line end is outside the diff hunk")?;
+                replacement.push_str(
+                    new_text
+                        .get(start..end)
+                        .context("selected lines are not on UTF-8 boundaries")?,
+                );
+            }
+            if !replacement.is_empty() {
+                let insertion = hunk.diff_base_byte_range.start;
+                edits.push((insertion..insertion, Arc::from(replacement)));
+            }
+        } else if old_line_count == new_line_count {
+            for range in merged_selected_lines {
+                let old_start = *old_offsets
+                    .get(range.start)
+                    .context("selected old line start is outside the diff hunk")?;
+                let old_end = *old_offsets
+                    .get(range.end)
+                    .context("selected old line end is outside the diff hunk")?;
+                let new_start = *new_offsets
+                    .get(range.start)
+                    .context("selected new line start is outside the diff hunk")?;
+                let new_end = *new_offsets
+                    .get(range.end)
+                    .context("selected new line end is outside the diff hunk")?;
+                let replacement = new_text
+                    .get(new_start..new_end)
+                    .context("selected lines are not on UTF-8 boundaries")?;
+                let base_start = hunk.diff_base_byte_range.start + old_start;
+                let base_end = hunk.diff_base_byte_range.start + old_end;
+                edits.push((base_start..base_end, Arc::from(replacement)));
+            }
+        } else if merged_selected_lines.len() == 1
+            && merged_selected_lines[0] == (0..new_line_count)
+        {
+            edits.push((hunk.diff_base_byte_range.clone(), Arc::from(new_text)));
+        } else if !merged_selected_lines.is_empty() {
+            bail!("cannot stage a partial selection from an unbalanced replacement")
+        }
+    }
+
+    edits.sort_by_key(|(range, _)| (range.start, range.end));
+    let mut merged_edits: Vec<(Range<usize>, Arc<str>)> = Vec::new();
+    for (range, replacement) in edits {
+        if let Some((previous_range, previous_text)) = merged_edits.last_mut()
+            && range.start <= previous_range.end
+        {
+            if range.start < previous_range.end {
+                bail!("selected changes overlap in the index")
+            }
+            let mut merged_text = String::with_capacity(previous_text.len() + replacement.len());
+            merged_text.push_str(previous_text);
+            merged_text.push_str(&replacement);
+            *previous_text = Arc::from(merged_text);
+            previous_range.end = range.end;
+        } else {
+            merged_edits.push((range, replacement));
+        }
+    }
+    Ok(merged_edits)
+}
+
+fn selected_unstage_index_edits(
+    uncommitted_snapshot: &buffer_diff::BufferDiffSnapshot,
+    unstaged_snapshot: &buffer_diff::BufferDiffSnapshot,
+    worktree_ranges: &[Range<Anchor>],
+    buffer_snapshot: &text::BufferSnapshot,
+) -> Result<Vec<(Range<usize>, Arc<str>)>> {
+    let head_text = uncommitted_snapshot.base_text().text();
+    let mut edits: Vec<(Range<usize>, Arc<str>)> = Vec::new();
+
+    for worktree_range in worktree_ranges {
+        let selection = worktree_range.to_point(buffer_snapshot);
+        if selection.is_empty() {
+            continue;
+        }
+        let selected_start_row = selection.start.row as usize;
+        let selected_end_row = selection.end.row as usize + usize::from(selection.end.column > 0);
+
+        for hunk in uncommitted_snapshot
+            .raw_hunks_intersecting_range(worktree_range.clone(), buffer_snapshot)
+        {
+            let hunk_start_row = hunk.range.start.row as usize;
+            let worktree_text: String = buffer_snapshot
+                .text_for_range(hunk.buffer_range.clone())
+                .collect();
+            let worktree_offsets = line_offsets(&worktree_text);
+            let worktree_line_count = worktree_offsets.len().saturating_sub(1);
+            let Some(head_chunk) = head_text.get(hunk.diff_base_byte_range.clone()) else {
+                bail!("diff base range is not valid UTF-8")
+            };
+            let head_offsets = line_offsets(head_chunk);
+            let head_line_count = head_offsets.len().saturating_sub(1);
+            let unstaged_hunks = unstaged_snapshot
+                .raw_hunks_intersecting_range(hunk.buffer_range.clone(), buffer_snapshot)
+                .collect::<Vec<_>>();
+            let mut unstaged_line_ranges = unstaged_hunks
+                .iter()
+                .filter_map(|unstaged_hunk| {
+                    let start = unstaged_hunk.range.start.row as usize;
+                    let end = unstaged_hunk.range.end.row as usize
+                        + usize::from(unstaged_hunk.range.end.column > 0);
+                    (start < end).then_some(start..end)
+                })
+                .collect::<Vec<_>>();
+            unstaged_line_ranges.sort_by_key(|range| range.start);
+
+            let index_offset_for_worktree_offset = |worktree_offset: usize| -> Result<usize> {
+                let worktree_point = buffer_snapshot.offset_to_point(worktree_offset);
+                let index_point = unstaged_snapshot
+                    .buffer_point_to_base_text_point(worktree_point, buffer_snapshot);
+                Ok(unstaged_snapshot.base_text().point_to_offset(index_point))
+            };
+
+            if worktree_line_count == 0 {
+                let deletion_selected =
+                    selected_start_row <= hunk_start_row && hunk_start_row < selected_end_row;
+                let deletion_is_unstaged = unstaged_hunks.iter().any(|unstaged_hunk| {
+                    unstaged_hunk.range.is_empty()
+                        && unstaged_hunk.range.start.row as usize == hunk_start_row
+                });
+                if deletion_selected && !deletion_is_unstaged {
+                    let worktree_offset = hunk.buffer_range.start.to_offset(buffer_snapshot);
+                    let index_offset = index_offset_for_worktree_offset(worktree_offset)?;
+                    edits.push((index_offset..index_offset, Arc::from(head_chunk)));
+                }
+                continue;
+            }
+
+            let hunk_end_row = hunk_start_row + worktree_line_count;
+            let selected_start = selected_start_row.max(hunk_start_row);
+            let selected_end = selected_end_row.min(hunk_end_row);
+            if selected_start >= selected_end {
+                continue;
+            }
+
+            let mut selected_staged_ranges = Vec::new();
+            let mut cursor = selected_start;
+            for unstaged_range in &unstaged_line_ranges {
+                let unstaged_start = unstaged_range.start.max(selected_start);
+                let unstaged_end = unstaged_range.end.min(selected_end);
+                if unstaged_start >= unstaged_end {
+                    continue;
+                }
+                if cursor < unstaged_start {
+                    selected_staged_ranges
+                        .push(cursor - hunk_start_row..unstaged_start - hunk_start_row);
+                }
+                cursor = cursor.max(unstaged_end);
+            }
+            if cursor < selected_end {
+                selected_staged_ranges.push(cursor - hunk_start_row..selected_end - hunk_start_row);
+            }
+
+            for selected_lines in selected_staged_ranges {
+                if head_line_count == worktree_line_count {
+                    let head_start = *head_offsets
+                        .get(selected_lines.start)
+                        .context("selected old line start is outside the diff hunk")?;
+                    let head_end = *head_offsets
+                        .get(selected_lines.end)
+                        .context("selected old line end is outside the diff hunk")?;
+                    let worktree_start = *worktree_offsets
+                        .get(selected_lines.start)
+                        .context("selected line start is outside the diff hunk")?;
+                    let worktree_end = *worktree_offsets
+                        .get(selected_lines.end)
+                        .context("selected line end is outside the diff hunk")?;
+                    let worktree_base_offset = hunk.buffer_range.start.to_offset(buffer_snapshot);
+                    let index_start =
+                        index_offset_for_worktree_offset(worktree_base_offset + worktree_start)?;
+                    let index_end =
+                        index_offset_for_worktree_offset(worktree_base_offset + worktree_end)?;
+                    let replacement = head_chunk
+                        .get(head_start..head_end)
+                        .context("selected old lines are not on UTF-8 boundaries")?;
+                    edits.push((
+                        index_start.min(index_end)..index_end.max(index_start),
+                        Arc::from(replacement),
+                    ));
+                } else if head_line_count == 0 {
+                    let worktree_start = *worktree_offsets
+                        .get(selected_lines.start)
+                        .context("selected line start is outside the diff hunk")?;
+                    let worktree_end = *worktree_offsets
+                        .get(selected_lines.end)
+                        .context("selected line end is outside the diff hunk")?;
+                    let worktree_base_offset = hunk.buffer_range.start.to_offset(buffer_snapshot);
+                    let index_start =
+                        index_offset_for_worktree_offset(worktree_base_offset + worktree_start)?;
+                    let index_end =
+                        index_offset_for_worktree_offset(worktree_base_offset + worktree_end)?;
+                    edits.push((
+                        index_start.min(index_end)..index_end.max(index_start),
+                        Arc::from(""),
+                    ));
+                } else if selected_lines == (0..worktree_line_count) && unstaged_hunks.is_empty() {
+                    let start = hunk.buffer_range.start.to_offset(buffer_snapshot);
+                    let end = hunk.buffer_range.end.to_offset(buffer_snapshot);
+                    let index_start = index_offset_for_worktree_offset(start)?;
+                    let index_end = index_offset_for_worktree_offset(end)?;
+                    edits.push((
+                        index_start.min(index_end)..index_end.max(index_start),
+                        Arc::from(head_chunk),
+                    ));
+                } else {
+                    bail!("cannot unstage a partial selection from an unbalanced replacement")
+                }
+            }
+        }
+    }
+
+    edits.sort_by_key(|(range, _)| (range.start, range.end));
+    let mut merged_edits: Vec<(Range<usize>, Arc<str>)> = Vec::new();
+    for (range, replacement) in edits {
+        if let Some((previous_range, previous_text)) = merged_edits.last_mut()
+            && range.start <= previous_range.end
+        {
+            if range.start < previous_range.end {
+                bail!("selected changes overlap in the index")
+            }
+            let mut merged_text = String::with_capacity(previous_text.len() + replacement.len());
+            merged_text.push_str(previous_text);
+            merged_text.push_str(&replacement);
+            *previous_text = Arc::from(merged_text);
+            previous_range.end = range.end;
+        } else {
+            merged_edits.push((range, replacement));
+        }
+    }
+    Ok(merged_edits)
+}
+
+fn selected_unstage_staged_index_edits(
+    staged_snapshot: &buffer_diff::BufferDiffSnapshot,
+    index_ranges: &[Range<Anchor>],
+    index_snapshot: &text::BufferSnapshot,
+) -> Result<Vec<(Range<usize>, Arc<str>)>> {
+    let head_text = staged_snapshot.base_text().text();
+    let mut edits: Vec<(Range<usize>, Arc<str>)> = Vec::new();
+
+    for index_range in index_ranges {
+        let selection = index_range.to_point(index_snapshot);
+        if selection.is_empty() {
+            continue;
+        }
+        let selected_start_row = selection.start.row as usize;
+        let selected_end_row = selection.end.row as usize + usize::from(selection.end.column > 0);
+
+        for hunk in
+            staged_snapshot.raw_hunks_intersecting_range(index_range.clone(), index_snapshot)
+        {
+            let hunk_start_row = hunk.range.start.row as usize;
+            let index_text: String = index_snapshot
+                .text_for_range(hunk.buffer_range.clone())
+                .collect();
+            let index_offsets = line_offsets(&index_text);
+            let index_line_count = index_offsets.len().saturating_sub(1);
+            let Some(head_chunk) = head_text.get(hunk.diff_base_byte_range.clone()) else {
+                bail!("diff base range is not valid UTF-8")
+            };
+            let head_offsets = line_offsets(head_chunk);
+            let head_line_count = head_offsets.len().saturating_sub(1);
+
+            if index_line_count == 0 {
+                if selected_start_row <= hunk_start_row && hunk_start_row < selected_end_row {
+                    let index_offset = hunk.buffer_range.start.to_offset(index_snapshot);
+                    edits.push((index_offset..index_offset, Arc::from(head_chunk)));
+                }
+                continue;
+            }
+
+            let hunk_end_row = hunk_start_row + index_line_count;
+            let selected_start = selected_start_row.max(hunk_start_row);
+            let selected_end = selected_end_row.min(hunk_end_row);
+            if selected_start >= selected_end {
+                continue;
+            }
+            let selected_lines = selected_start - hunk_start_row..selected_end - hunk_start_row;
+            let index_base_offset = hunk.buffer_range.start.to_offset(index_snapshot);
+
+            if head_line_count == index_line_count {
+                let head_start = *head_offsets
+                    .get(selected_lines.start)
+                    .context("selected old line start is outside the diff hunk")?;
+                let head_end = *head_offsets
+                    .get(selected_lines.end)
+                    .context("selected old line end is outside the diff hunk")?;
+                let index_start = *index_offsets
+                    .get(selected_lines.start)
+                    .context("selected line start is outside the diff hunk")?;
+                let index_end = *index_offsets
+                    .get(selected_lines.end)
+                    .context("selected line end is outside the diff hunk")?;
+                let replacement = head_chunk
+                    .get(head_start..head_end)
+                    .context("selected old lines are not on UTF-8 boundaries")?;
+                edits.push((
+                    index_base_offset + index_start..index_base_offset + index_end,
+                    Arc::from(replacement),
+                ));
+            } else if head_line_count == 0 {
+                let index_start = *index_offsets
+                    .get(selected_lines.start)
+                    .context("selected line start is outside the diff hunk")?;
+                let index_end = *index_offsets
+                    .get(selected_lines.end)
+                    .context("selected line end is outside the diff hunk")?;
+                edits.push((
+                    index_base_offset + index_start..index_base_offset + index_end,
+                    Arc::from(""),
+                ));
+            } else if selected_lines == (0..index_line_count) {
+                let index_end = hunk.buffer_range.end.to_offset(index_snapshot);
+                edits.push((index_base_offset..index_end, Arc::from(head_chunk)));
+            } else {
+                bail!("cannot unstage a partial selection from an unbalanced replacement")
+            }
+        }
+    }
+
+    edits.sort_by_key(|(range, _)| (range.start, range.end));
+    let mut merged_edits: Vec<(Range<usize>, Arc<str>)> = Vec::new();
+    for (range, replacement) in edits {
+        if let Some((previous_range, previous_text)) = merged_edits.last_mut()
+            && range.start <= previous_range.end
+        {
+            if range.start < previous_range.end {
+                bail!("selected changes overlap in the index")
+            }
+            let mut merged_text = String::with_capacity(previous_text.len() + replacement.len());
+            merged_text.push_str(previous_text);
+            merged_text.push_str(&replacement);
+            *previous_text = Arc::from(merged_text);
+            previous_range.end = range.end;
+        } else {
+            merged_edits.push((range, replacement));
+        }
+    }
+    Ok(merged_edits)
+}
+
 fn decode_git_text(bytes: Vec<u8>) -> Result<String> {
     let text = decode_text(bytes)?.text;
     anyhow::ensure!(
@@ -360,6 +807,49 @@ impl DiffOperations for GitDiffOperations {
                     .secondary_diff()
                     .context("diff has no unstaged secondary")?;
                 project.stage_hunks(buffer, secondary_diff, buffer_ranges, cx)
+            }
+            _ => Ok(()),
+        });
+        result.and_then(|result| result).log_err();
+    }
+
+    fn stage_selected_ranges(
+        &self,
+        diff: Entity<BufferDiff>,
+        buffer: Option<Entity<Buffer>>,
+        buffer_ranges: Vec<Range<Anchor>>,
+        cx: &mut App,
+    ) {
+        let result = self.project.update(cx, |project, cx| match self.kind {
+            DiffKind::Unstaged => {
+                let buffer = buffer.context("unstaged diff has no worktree buffer")?;
+                project.stage_selected_ranges(buffer, diff, buffer_ranges, cx)
+            }
+            DiffKind::Uncommitted => {
+                let buffer = buffer.context("uncommitted diff has no worktree buffer")?;
+                let secondary_diff = diff
+                    .read(cx)
+                    .secondary_diff()
+                    .context("diff has no unstaged secondary")?;
+                project.stage_selected_ranges(buffer, secondary_diff, buffer_ranges, cx)
+            }
+            _ => Ok(()),
+        });
+        result.and_then(|result| result).log_err();
+    }
+
+    fn unstage_selected_ranges(
+        &self,
+        diff: Entity<BufferDiff>,
+        buffer: Option<Entity<Buffer>>,
+        buffer_ranges: Vec<Range<Anchor>>,
+        cx: &mut App,
+    ) {
+        let result = self.project.update(cx, |project, cx| match self.kind {
+            DiffKind::Staged => project.unstage_staged_selected_ranges(diff, buffer_ranges, cx),
+            DiffKind::Uncommitted => {
+                let buffer = buffer.context("uncommitted diff has no worktree buffer")?;
+                project.unstage_selected_ranges(buffer, diff, buffer_ranges, cx)
             }
             _ => Ok(()),
         });
@@ -1528,6 +2018,216 @@ impl GitStore {
             diff.set_pending_hunks(&unstaged_pending, &buffer_snapshot, cx);
         });
 
+        self.write_optimistic_index(buffer_id, cx);
+        Ok(())
+    }
+
+    pub fn stage_selected_ranges(
+        &mut self,
+        buffer: Entity<Buffer>,
+        unstaged_diff: Entity<BufferDiff>,
+        worktree_ranges: Vec<Range<Anchor>>,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        if worktree_ranges.is_empty() {
+            return Ok(());
+        }
+
+        let buffer_snapshot = buffer.read(cx).snapshot();
+        let buffer_id = buffer_snapshot.remote_id();
+        anyhow::ensure!(
+            buffer_snapshot
+                .file()
+                .is_some_and(|file| file.disk_state().exists()),
+            "cannot partially stage a deleted file"
+        );
+        let unstaged_snapshot = unstaged_diff.read(cx).snapshot(cx);
+        anyhow::ensure!(
+            buffer_snapshot.version() == unstaged_snapshot.buffer_version(),
+            "file changed before the selected lines could be staged"
+        );
+        let index_edits =
+            selected_index_edits(&unstaged_snapshot, &worktree_ranges, &buffer_snapshot)?;
+        if index_edits.is_empty() {
+            return Ok(());
+        }
+
+        let diff_state = self
+            .diffs
+            .get(&buffer_id)
+            .cloned()
+            .context("failed to find git state for buffer")?;
+        let mut index_edits = index_edits;
+        diff_state.update(cx, |diff_state, _| {
+            if let Some(pending_edits) = &diff_state.pending_index_edits {
+                for (pending_range, pending_text) in pending_edits {
+                    let Some((range, replacement)) = index_edits.iter_mut().find(|(range, _)| {
+                        pending_range.end == range.start || range.end == pending_range.start
+                    }) else {
+                        continue;
+                    };
+
+                    if pending_range.end == range.start {
+                        let mut merged_text =
+                            String::with_capacity(pending_text.len() + replacement.len());
+                        merged_text.push_str(pending_text);
+                        merged_text.push_str(replacement);
+                        *replacement = Arc::from(merged_text);
+                        range.start = pending_range.start;
+                    } else {
+                        let mut merged_text =
+                            String::with_capacity(replacement.len() + pending_text.len());
+                        merged_text.push_str(replacement);
+                        merged_text.push_str(pending_text);
+                        *replacement = Arc::from(merged_text);
+                        range.end = pending_range.end;
+                    }
+                }
+            }
+            let index_footprints = index_edits
+                .iter()
+                .map(|(range, _)| range.clone())
+                .collect::<Vec<_>>();
+            diff_state.remove_overlapping_pending_index_edits(&index_footprints);
+            diff_state.insert_pending_index_edits(Some(index_edits));
+        });
+
+        self.write_optimistic_index(buffer_id, cx);
+        Ok(())
+    }
+
+    pub fn unstage_selected_ranges(
+        &mut self,
+        buffer: Entity<Buffer>,
+        uncommitted_diff: Entity<BufferDiff>,
+        worktree_ranges: Vec<Range<Anchor>>,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        if worktree_ranges.is_empty() {
+            return Ok(());
+        }
+
+        let buffer_snapshot = buffer.read(cx).snapshot();
+        let buffer_id = buffer_snapshot.remote_id();
+        let uncommitted_snapshot = uncommitted_diff.read(cx).snapshot(cx);
+        anyhow::ensure!(
+            buffer_snapshot.version() == uncommitted_snapshot.buffer_version(),
+            "file changed before the selected lines could be unstaged"
+        );
+        let unstaged_snapshot = uncommitted_snapshot
+            .secondary_diff()
+            .context("uncommitted diff has no unstaged secondary")?;
+        anyhow::ensure!(
+            buffer_snapshot.version() == unstaged_snapshot.buffer_version(),
+            "file changed before the selected lines could be unstaged"
+        );
+
+        let diff_state = self
+            .diffs
+            .get(&buffer_id)
+            .cloned()
+            .context("failed to find git state for buffer")?;
+        anyhow::ensure!(
+            !diff_state
+                .read(cx)
+                .pending_index_edits
+                .as_ref()
+                .is_some_and(|edits| !edits.is_empty()),
+            "Git index update is still in progress"
+        );
+        let index_buffer = diff_state
+            .read(cx)
+            .index_text_buffer()
+            .context("index text is not loaded")?;
+        let index_snapshot = index_buffer.read(cx).text_snapshot();
+        anyhow::ensure!(
+            unstaged_snapshot.base_text().version() == index_snapshot.version(),
+            "Git index changed before the selected lines could be unstaged"
+        );
+
+        let index_edits = selected_unstage_index_edits(
+            &uncommitted_snapshot,
+            &unstaged_snapshot,
+            &worktree_ranges,
+            &buffer_snapshot,
+        )?;
+        if index_edits.is_empty() {
+            return Ok(());
+        }
+
+        let removes_new_file = if !uncommitted_snapshot.base_text_exists() {
+            let mut resulting_index = index_snapshot.as_rope().clone();
+            for (range, replacement) in index_edits.iter().rev() {
+                resulting_index.replace(range.clone(), replacement.as_ref());
+            }
+            resulting_index.is_empty()
+        } else {
+            false
+        };
+        diff_state.update(cx, |diff_state, _| {
+            diff_state.insert_pending_index_edits((!removes_new_file).then_some(index_edits));
+        });
+        self.write_optimistic_index(buffer_id, cx);
+        Ok(())
+    }
+
+    pub fn unstage_staged_selected_ranges(
+        &mut self,
+        staged_diff: Entity<BufferDiff>,
+        index_ranges: Vec<Range<Anchor>>,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        if index_ranges.is_empty() {
+            return Ok(());
+        }
+
+        let index_buffer_id = staged_diff.read(cx).buffer_id;
+        let buffer_id = *self
+            .buffer_ids_by_index_text_buffer_id
+            .get(&index_buffer_id)
+            .context("failed to find git state for index text buffer")?;
+        let diff_state = self
+            .diffs
+            .get(&buffer_id)
+            .cloned()
+            .context("failed to find git state for buffer")?;
+        anyhow::ensure!(
+            !diff_state
+                .read(cx)
+                .pending_index_edits
+                .as_ref()
+                .is_some_and(|edits| !edits.is_empty()),
+            "Git index update is still in progress"
+        );
+        let index_buffer = diff_state
+            .read(cx)
+            .index_text_buffer()
+            .context("index text is not loaded")?;
+        let index_snapshot = index_buffer.read(cx).text_snapshot();
+        let staged_snapshot = staged_diff.read(cx).snapshot(cx);
+        anyhow::ensure!(
+            staged_snapshot.buffer_version() == index_snapshot.version(),
+            "Git index changed before the selected lines could be unstaged"
+        );
+
+        let index_edits =
+            selected_unstage_staged_index_edits(&staged_snapshot, &index_ranges, &index_snapshot)?;
+        if index_edits.is_empty() {
+            return Ok(());
+        }
+
+        let removes_new_file = if !staged_snapshot.base_text_exists() {
+            let mut resulting_index = index_snapshot.as_rope().clone();
+            for (range, replacement) in index_edits.iter().rev() {
+                resulting_index.replace(range.clone(), replacement.as_ref());
+            }
+            resulting_index.is_empty()
+        } else {
+            false
+        };
+        diff_state.update(cx, |diff_state, _| {
+            diff_state.insert_pending_index_edits((!removes_new_file).then_some(index_edits));
+        });
         self.write_optimistic_index(buffer_id, cx);
         Ok(())
     }

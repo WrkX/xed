@@ -1,12 +1,16 @@
+use crate::dock::Dock;
 use crate::{
     ItemHandle, MultiWorkspace, Pane, SidebarSide, ToggleWorkspaceSidebar,
     sidebar_side_context_menu,
 };
+use agent_settings::AgentSettings;
 use gpui::{
     Anchor, AnyView, App, Context, Decorations, Entity, FocusHandle, Focusable, IntoElement,
     ParentElement, Render, Role, SharedString, Styled, Subscription, WeakEntity, Window,
 };
-use settings::{SettingsContent, update_settings_file};
+use settings::{
+    Settings, SettingsContent, SettingsStore, ThreadsButtonLocation, update_settings_file,
+};
 use std::{any::TypeId, sync::Arc};
 use theme::CLIENT_SIDE_DECORATION_ROUNDING;
 use ui::{ContextMenu, Divider, IconPosition, Indicator, Tooltip, prelude::*, right_click_menu};
@@ -56,6 +60,10 @@ pub trait StatusItemView: Render {
     /// that the status bar can show a "Hide Button" entry in its
     /// right-click menu.
     fn hide_setting(&self, cx: &App) -> Option<HideStatusItem>;
+
+    fn should_render(&self, _cx: &App) -> bool {
+        true
+    }
 }
 
 trait StatusItemViewHandle: Send {
@@ -68,6 +76,7 @@ trait StatusItemViewHandle: Send {
     );
     fn item_type(&self) -> TypeId;
     fn hide_setting(&self, cx: &App) -> Option<HideStatusItem>;
+    fn should_render(&self, cx: &App) -> bool;
 }
 
 #[derive(Default)]
@@ -90,7 +99,9 @@ impl SidebarStatus {
                     open: mw.sidebar_open() && enabled,
                     side: mw.sidebar_side(cx),
                     has_notifications: mw.sidebar_has_notifications(cx),
-                    show_toggle: enabled,
+                    show_toggle: enabled
+                        && AgentSettings::get_global(cx).threads_button_location
+                            == ThreadsButtonLocation::Default,
                 }
             })
             .unwrap_or_default()
@@ -104,6 +115,8 @@ pub struct StatusBar {
     multi_workspace: Option<WeakEntity<MultiWorkspace>>,
     focus_handle: FocusHandle,
     _observe_active_pane: Subscription,
+    _observe_left_dock: Subscription,
+    _observe_settings: Subscription,
 }
 
 impl Focusable for StatusBar {
@@ -200,9 +213,15 @@ impl StatusBar {
                 sidebar.show_toggle && !sidebar.open && sidebar.side == SidebarSide::Left,
                 |this| this.child(self.render_sidebar_toggle(sidebar, cx)),
             )
-            .children(self.left_items.iter().enumerate().map(|(index, item)| {
-                render_hideable_item("status-bar-left", index, item.as_ref(), cx)
-            }))
+            .children(
+                self.left_items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| item.should_render(cx))
+                    .map(|(index, item)| {
+                        render_hideable_item("status-bar-left", index, item.as_ref(), cx)
+                    }),
+            )
     }
 
     fn render_right_tools(
@@ -219,6 +238,7 @@ impl StatusBar {
                     .iter()
                     .enumerate()
                     .rev()
+                    .filter(|(_, item)| item.should_render(cx))
                     .map(|(index, item)| {
                         render_hideable_item("status-bar-right", index, item.as_ref(), cx)
                     }),
@@ -326,6 +346,7 @@ pub fn add_hide_button_entry(menu: ContextMenu, hide: HideStatusItem) -> Context
 impl StatusBar {
     pub fn new(
         active_pane: &Entity<Pane>,
+        left_dock: Entity<Dock>,
         multi_workspace: Option<WeakEntity<MultiWorkspace>>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -339,6 +360,8 @@ impl StatusBar {
             _observe_active_pane: cx.observe_in(active_pane, window, |this, _, window, cx| {
                 this.update_active_pane_item(window, cx)
             }),
+            _observe_left_dock: cx.observe(&left_dock, |_, _, cx| cx.notify()),
+            _observe_settings: cx.observe_global::<SettingsStore>(|_, cx| cx.notify()),
         };
         this.update_active_pane_item(window, cx);
         this
@@ -496,6 +519,10 @@ impl<T: StatusItemView> StatusItemViewHandle for Entity<T> {
 
     fn hide_setting(&self, cx: &App) -> Option<HideStatusItem> {
         self.read(cx).hide_setting(cx)
+    }
+
+    fn should_render(&self, cx: &App) -> bool {
+        self.read(cx).should_render(cx)
     }
 }
 
