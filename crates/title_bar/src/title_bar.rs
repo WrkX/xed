@@ -410,6 +410,24 @@ impl Render for TitleBar {
                             },
                         )
                         .children(self.render_restricted_mode(cx))
+                        .when(vscode_mode, |title_bar| {
+                            title_bar.child(
+                                IconButton::new("vscode-left-sidebar", IconName::PanelLeft)
+                                    .icon_size(IconSize::Small)
+                                    .toggle_state(left_sidebar_visible)
+                                    .aria_label("Left Sidebar")
+                                    .tooltip(|_, cx| {
+                                        Tooltip::for_action(
+                                            "Toggle Left Sidebar",
+                                            &ToggleLeftDock,
+                                            cx,
+                                        )
+                                    })
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(ToggleLeftDock.boxed_clone(), cx);
+                                    }),
+                            )
+                        })
                         .when(render_project_items, |title_bar| {
                             title_bar
                                 .when(title_bar_settings.show_project_items, |title_bar| {
@@ -493,22 +511,6 @@ impl Render for TitleBar {
                         h_flex()
                             .gap_0p5()
                             .child(
-                                IconButton::new("vscode-left-sidebar", IconName::PanelLeft)
-                                    .icon_size(IconSize::Small)
-                                    .toggle_state(left_sidebar_visible)
-                                    .aria_label("Left Sidebar")
-                                    .tooltip(|_, cx| {
-                                        Tooltip::for_action(
-                                            "Toggle Left Sidebar",
-                                            &ToggleLeftDock,
-                                            cx,
-                                        )
-                                    })
-                                    .on_click(|_, window, cx| {
-                                        window.dispatch_action(ToggleLeftDock.boxed_clone(), cx);
-                                    }),
-                            )
-                            .child(
                                 IconButton::new("vscode-terminal", IconName::PanelBottom)
                                     .icon_size(IconSize::Small)
                                     .toggle_state(terminal_visible)
@@ -529,7 +531,7 @@ impl Render for TitleBar {
                                     })),
                             )
                             .child(
-                                IconButton::new("vscode-agent-panel", IconName::PanelRight)
+                                IconButton::new("vscode-agent-panel", IconName::SpeechBubble)
                                     .icon_size(IconSize::Small)
                                     .toggle_state(agent_visible)
                                     .disabled(!agent_available)
