@@ -75,6 +75,8 @@ impl Render for ModelSelectorPopover {
             Button::new("active-model", model_name)
                 .label_size(LabelSize::Small)
                 .color(color)
+                .truncate(true)
+                .width(rems(8.0))
                 .when_some(model_icon, |this, icon| {
                     this.start_icon(
                         match icon {

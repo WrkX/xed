@@ -6216,7 +6216,7 @@ impl AgentPanel {
             .justify_between();
 
         let empty_thread_title = matches!(mode, ToolbarMode::EmptyThread).then(|| {
-            Label::new(format!("New {} Thread", selected_agent_label))
+            Label::new(selected_agent_label.clone())
                 .color(Color::Muted)
                 .truncate()
                 .into_any_element()

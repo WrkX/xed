@@ -6141,7 +6141,7 @@ See the [debugger page](../debugger.md) for more information about debugging sup
     "show_count_badge": false,
     "diff_stats": true,
     "commit_title_max_length": 0,
-    "entry_primary_click_action": "project_diff"
+    "entry_primary_click_action": "file_diff"
   }
 }
 ```

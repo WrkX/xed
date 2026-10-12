@@ -808,9 +808,12 @@ impl ThreadView {
 
         subscriptions.push(cx.observe(&thread, |_, _, cx| cx.notify()));
         subscriptions.push(cx.observe(&conversation, |_, _, cx| cx.notify()));
+        subscriptions.push(cx.observe_global::<settings::SettingsStore>(|this, cx| {
+            this.sync_editor_mode(cx);
+            cx.notify();
+        }));
 
-        let has_slash_completions = session_capabilities.read().has_slash_completions();
-        let placeholder = placeholder_text(agent_display_name.as_ref(), has_slash_completions);
+        let placeholder = placeholder_text(agent_display_name.as_ref());
 
         let mut should_auto_submit = false;
         let mut show_external_source_prompt_warning = false;
@@ -4938,6 +4941,7 @@ impl ThreadView {
 
         let focus_handle = self.message_editor.focus_handle(cx);
         let editor_bg_color = cx.theme().colors().editor_background;
+        let editor_focused = focus_handle.contains_focused(window, cx);
 
         let editor_expanded = self.editor_expanded;
         let (expand_icon, expand_tooltip) = if editor_expanded {
@@ -4948,7 +4952,6 @@ impl ThreadView {
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
         let has_messages = self.list_state.item_count() > 0;
-        let fills_container = !has_messages || editor_expanded;
         let composer_is_read_only = self.message_editor.read(cx).editor().read(cx).read_only(cx);
         let discard_draft_button = composer_is_read_only.then(|| {
             div()
@@ -4968,46 +4971,42 @@ impl ThreadView {
         });
 
         h_flex()
-            .py_2()
-            .bg(editor_bg_color)
+            .p_3()
+            .flex_none()
             .justify_center()
             .on_action(cx.listener(Self::handle_message_editor_move_up))
-            .map(|this| {
-                if has_messages {
-                    this.on_action(cx.listener(Self::expand_message_editor))
-                        .border_t_1()
-                        .border_color(cx.theme().colors().border)
-                        .when(editor_expanded, |this| this.h(vh(0.8, window)))
-                } else {
-                    this.flex_1().size_full()
-                }
-            })
+            .on_action(cx.listener(Self::expand_message_editor))
+            .when(editor_expanded, |this| this.h(vh(0.8, window)))
             .child(
                 v_flex()
-                    .when_some(max_content_width, |this, max_w| this.flex_basis(max_w))
-                    .when(max_content_width.is_none(), |this| this.w_full())
+                    .w_full()
+                    .when_some(max_content_width, |this, max_w| this.max_w(max_w))
                     .min_w_0()
-                    .when(fills_container, |this| this.h_full())
-                    .px_2()
-                    .flex_shrink_1()
-                    .flex_grow_0()
-                    .justify_between()
-                    .gap_2()
+                    .when(editor_expanded, |this| this.h_full())
+                    .rounded_xl()
+                    .border_1()
+                    .border_color(if editor_focused {
+                        cx.theme().colors().border_focused
+                    } else {
+                        cx.theme().colors().border_variant
+                    })
+                    .bg(editor_bg_color)
+                    .overflow_hidden()
                     .child(
                         v_flex()
                             .relative()
                             .w_full()
                             .min_h_0()
-                            .when(fills_container, |this| this.flex_1())
-                            .pt_1()
-                            .pr_2p5()
+                            .when(editor_expanded, |this| this.flex_1())
+                            .p_3()
+                            .pr_7()
                             .child(self.message_editor.clone())
-                            .when(has_messages, |this| {
+                            .when(has_messages || editor_expanded, |this| {
                                 this.child(
                                     h_flex()
                                         .absolute()
-                                        .top_0()
-                                        .right_0()
+                                        .top_2()
+                                        .right_2()
                                         .opacity(0.5)
                                         .hover(|s| s.opacity(1.0))
                                         .child(
@@ -5040,37 +5039,180 @@ impl ThreadView {
                             .w_full()
                             .min_w_0()
                             .flex_none()
-                            .flex_wrap()
+                            .px_2()
+                            .py_1p5()
+                            .gap_1()
+                            .border_t_1()
+                            .border_color(cx.theme().colors().border_variant.opacity(0.5))
                             .justify_between()
                             .child(
                                 h_flex()
                                     .min_w_0()
-                                    .flex_wrap()
+                                    .flex_1()
                                     .gap_0p5()
                                     .child(self.render_add_context_button(cx))
-                                    .child(self.render_follow_toggle(cx))
-                                    .children(self.render_fast_mode_control(cx))
-                                    .children(self.render_thinking_control(cx)),
+                                    .child(self.render_composer_options_menu(cx))
+                                    .child(
+                                        div().min_w_0().flex_1().child(
+                                            match self.config_options_view.as_ref() {
+                                                Some(config_view) => {
+                                                    config_view.read(cx).render_model_selector(cx)
+                                                }
+                                                None => div()
+                                                    .children(self.model_selector.clone())
+                                                    .into_any_element(),
+                                            },
+                                        ),
+                                    ),
                             )
                             .child(
                                 h_flex()
-                                    .min_w_0()
-                                    .flex_wrap()
+                                    .flex_none()
                                     .gap_1()
                                     .children(discard_draft_button)
-                                    .children(self.render_token_usage(cx))
-                                    .children(self.profile_selector.clone())
-                                    .map(|this| match self.config_options_view.clone() {
-                                        Some(config_view) => this.child(config_view),
-                                        None => this
-                                            .children(self.mode_selector.clone())
-                                            .children(self.model_selector.clone()),
-                                    })
+                                    .children(self.render_approval_selector(cx))
                                     .child(self.render_send_button(cx)),
                             ),
                     ),
             )
             .into_any()
+    }
+
+    fn render_composer_options_menu(&self, cx: &Context<Self>) -> impl IntoElement {
+        let thread_view = cx.weak_entity();
+        PopoverMenu::new("composer-options")
+            .trigger_with_tooltip(
+                IconButton::new("composer-options", IconName::Settings)
+                    .icon_size(IconSize::Small)
+                    .icon_color(Color::Muted),
+                Tooltip::text("Message Options"),
+            )
+            .anchor(gpui::Anchor::BottomLeft)
+            .menu(move |window, cx| {
+                let thread_view = thread_view.clone();
+                Some(ContextMenu::build(window, cx, move |menu, _, _| {
+                    menu.header("Message Options").custom_row(move |_, cx| {
+                        thread_view
+                            .update(cx, |this, cx| {
+                                v_flex()
+                                    .p_2()
+                                    .gap_2()
+                                    .child(
+                                        h_flex()
+                                            .gap_1()
+                                            .children(this.profile_selector.clone())
+                                            .children(this.mode_selector.clone()),
+                                    )
+                                    .when_some(this.config_options_view.clone(), |element, view| {
+                                        element.child(view.read(cx).render_other_options(cx))
+                                    })
+                                    .child(
+                                        h_flex()
+                                            .gap_1()
+                                            .child(this.render_follow_toggle(cx))
+                                            .children(this.render_fast_mode_control(cx))
+                                            .children(this.render_thinking_control(cx))
+                                            .children(this.render_token_usage(cx)),
+                                    )
+                                    .into_any_element()
+                            })
+                            .log_err()
+                            .unwrap_or_else(|| Empty.into_any_element())
+                    })
+                }))
+            })
+    }
+
+    fn render_approval_selector(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        self.as_native_thread(cx)?;
+        let permission = AgentSettings::get_global(cx).tool_permissions.default;
+        let (label, icon) = match permission {
+            settings::ToolPermissionMode::Allow => ("Auto", IconName::BoltOutlined),
+            settings::ToolPermissionMode::Confirm => ("Ask", IconName::Lock),
+            settings::ToolPermissionMode::Deny => ("Block", IconName::XCircle),
+        };
+        let project = self.thread.read(cx).project().clone();
+        let thread_view = cx.weak_entity();
+
+        Some(
+            PopoverMenu::new("tool-approval-mode")
+                .trigger_with_tooltip(
+                    Button::new("tool-approval-mode", label)
+                        .label_size(LabelSize::Small)
+                        .color(Color::Muted)
+                        .start_icon(Icon::new(icon).size(IconSize::Small).color(Color::Muted)),
+                    Tooltip::text("Tool Approvals · All Zed Agent Threads"),
+                )
+                .anchor(gpui::Anchor::BottomRight)
+                .menu(move |window, cx| {
+                    let project = project.clone();
+                    let thread_view = thread_view.clone();
+                    Some(ContextMenu::build(window, cx, move |mut menu, _, _| {
+                        menu = menu.header("Tool Approvals · All Zed Agent Threads");
+                        for (label, mode) in [
+                            ("Ask by Default", settings::ToolPermissionMode::Confirm),
+                            ("Automatically Approve", settings::ToolPermissionMode::Allow),
+                            ("Block by Default", settings::ToolPermissionMode::Deny),
+                        ] {
+                            let project = project.clone();
+                            let thread_view = thread_view.clone();
+                            menu = menu.item(
+                                ContextMenuEntry::new(label)
+                                    .toggleable(IconPosition::End, mode == permission)
+                                    .handler(move |_, cx| {
+                                        let fs = project.read(cx).fs().clone();
+                                        let completion = update_settings_file_with_completion(
+                                            fs,
+                                            cx,
+                                            move |settings, _| {
+                                                settings
+                                                    .agent
+                                                    .get_or_insert_default()
+                                                    .tool_permissions
+                                                    .get_or_insert_default()
+                                                    .default = Some(mode);
+                                            },
+                                        );
+                                        let thread_view = thread_view.clone();
+                                        cx.spawn(async move |cx| {
+                                            let result = completion
+                                                .await
+                                                .map_err(anyhow::Error::from)
+                                                .and_then(|result| result);
+                                            if let Err(error) = result {
+                                                thread_view
+                                                    .update(cx, |this, cx| {
+                                                        this.handle_thread_error(
+                                                            error.context(
+                                                                "Could not save tool approval mode",
+                                                            ),
+                                                            cx,
+                                                        );
+                                                    })
+                                                    .log_err();
+                                            }
+                                        })
+                                        .detach();
+                                    }),
+                            );
+                        }
+                        menu.separator().custom_row(|_, _| {
+                            div()
+                                .max_w_64()
+                                .p_2()
+                                .child(
+                                    Label::new(
+                                        "Per-tool rules and sandbox permissions still apply.",
+                                    )
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                                )
+                                .into_any_element()
+                        })
+                    }))
+                })
+                .into_any_element(),
+        )
     }
 
     fn render_queue_steer_button(
@@ -6043,7 +6185,7 @@ impl ThreadView {
             let send_icon = if is_generating {
                 IconName::QueueMessage
             } else {
-                IconName::Send
+                IconName::ArrowUp
             };
             IconButton::new("send-message", send_icon)
                 .style(ButtonStyle::Filled)
@@ -6772,10 +6914,6 @@ impl ThreadView {
                 let editing = self.editing_message == Some(entry_ix);
                 let editor_focus = editor.focus_handle(cx).is_focused(window);
                 let focus_border = cx.theme().colors().border_focused;
-                // Drop shadows render as a dark halo on transparent windows.
-                let opaque_window = cx.theme().window_background_appearance()
-                    == gpui::WindowBackgroundAppearance::Opaque;
-
                 let has_checkpoint_button = message
                     .checkpoint
                     .as_ref()
@@ -6807,8 +6945,8 @@ impl ThreadView {
                             this.pt_2()
                         }
                     })
-                    .pb_3()
-                    .px_2()
+                    .pb_2()
+                    .px_4()
                     .gap_1p5()
                     .w_full()
                     .when(can_restore_checkpoint && has_checkpoint_button, |this| {
@@ -6835,17 +6973,15 @@ impl ThreadView {
                             .relative()
                             .child(
                                 div()
-                                    .py_3()
-                                    .px_2()
-                                    .rounded_md()
+                                    .py_2()
+                                    .px_3()
+                                    .rounded_lg()
                                     .bg(cx.theme().colors().editor_background)
                                     .border_1()
                                     .when(is_indented, |this| {
-                                        this.py_2().px_2().when(opaque_window, |this| {
-                                            this.shadow_sm()
-                                        })
+                                        this.py_1p5().px_2()
                                     })
-                                    .border_color(cx.theme().colors().border)
+                                    .border_color(cx.theme().colors().border_variant.opacity(0.7))
                                     .map(|this| {
                                         if !is_editable {
                                             if is_subagent {
@@ -6859,8 +6995,7 @@ impl ThreadView {
                                         if editing && !editor_focus {
                                             return this.border_dashed()
                                         }
-                                        this.when(opaque_window, |this| this.shadow_md())
-                                            .hover(|s| {
+                                        this.hover(|s| {
                                                 s.border_color(focus_border.opacity(0.8))
                                             })
                                     })
@@ -6962,7 +7097,7 @@ impl ThreadView {
 
                 let message_body = v_flex()
                     .w_full()
-                    .gap_3()
+                    .gap_2()
                     .children(chunks.iter().enumerate().filter_map(
                         |(chunk_ix, chunk)| match chunk {
                             AssistantMessageChunk::Message { block, .. } => {
@@ -6998,7 +7133,7 @@ impl ThreadView {
                 } else {
                     v_flex()
                         .px_5()
-                        .py_1p5()
+                        .py_1()
                         .when(is_last, |this| this.pb_4())
                         .w_full()
                         .text_ui(cx)
@@ -7902,24 +8037,11 @@ impl ThreadView {
     }
 
     pub(crate) fn sync_editor_mode(&mut self, cx: &mut Context<Self>) {
-        let has_messages = self.list_state.item_count() > 0;
-        let v2_empty_state = !has_messages;
-
-        if !has_messages {
-            self.editor_expanded = false;
-        }
-
         let mode = if self.editor_expanded {
             EditorMode::Full {
                 scale_ui_elements_with_buffer_font_size: false,
                 show_active_line_background: false,
                 sizing_behavior: SizingBehavior::ExcludeOverscrollMargin,
-            }
-        } else if v2_empty_state {
-            EditorMode::Full {
-                scale_ui_elements_with_buffer_font_size: false,
-                show_active_line_background: false,
-                sizing_behavior: SizingBehavior::Default,
             }
         } else {
             EditorMode::AutoHeight {
@@ -8112,7 +8234,7 @@ impl ThreadView {
         window: &Window,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let header_id = SharedString::from(format!("thinking-block-header-{}", entry_ix));
+        let header_id = SharedString::from(format!("thinking-block-header-{entry_ix}-{chunk_ix}"));
         let card_header_id = SharedString::from("inner-card-header");
 
         let key = (entry_ix, chunk_ix);
@@ -8120,6 +8242,8 @@ impl ThreadView {
         let entry_view_state = self.entry_view_state.read(cx);
         let (is_open, is_constrained) = entry_view_state.thinking_block_state(key, cx);
         let should_auto_scroll = entry_view_state.is_auto_expanded_thinking_block(key);
+        let is_streaming = self.thread.read(cx).status() == ThreadStatus::Generating
+            && self.thread.read(cx).entries().len() == entry_ix + 1;
         let scroll_handle = entry_view_state
             .entry(entry_ix)
             .and_then(|entry| entry.scroll_handle_for_assistant_message_chunk(chunk_ix));
@@ -8141,30 +8265,34 @@ impl ThreadView {
                     .group(&card_header_id)
                     .relative()
                     .w_full()
+                    .cursor_pointer()
                     .pr_1()
                     .justify_between()
                     .child(
                         h_flex()
-                            .h(window.line_height() - px(2.))
-                            .gap_1p5()
+                            .h_5()
+                            .gap_1()
                             .overflow_hidden()
                             .child(
-                                Icon::new(IconName::ToolThink)
-                                    .size(IconSize::Small)
+                                Icon::new(IconName::Circle)
+                                    .size(IconSize::XSmall)
                                     .color(Color::Muted),
                             )
                             .child(
                                 div()
-                                    .text_size(self.tool_name_font_size())
+                                    .text_size(rems_from_px(11_f32))
                                     .text_color(cx.theme().colors().text_muted)
-                                    .child("Thinking"),
+                                    .child(if is_streaming {
+                                        "Thinking…"
+                                    } else {
+                                        "Thoughts"
+                                    }),
                             ),
                     )
                     .child(
                         Disclosure::new(("expand", entry_ix), is_open)
                             .opened_icon(IconName::ChevronUp)
                             .closed_icon(IconName::ChevronDown)
-                            .visible_on_hover(&card_header_id)
                             .on_click(cx.listener(move |this, _event: &ClickEvent, window, cx| {
                                 this.toggle_thinking_block_expansion(key, window, cx);
                             })),
@@ -8470,7 +8598,7 @@ impl ThreadView {
             .group(group)
             .relative()
             .p_1p5()
-            .bg(header_bg)
+            .bg(header_bg.opacity(0.4))
             .when(is_preview, |this| this.pt_1().children(run_command_label))
             .child(markdown_element)
             .child(div().absolute().top_1().right_1().child(copy_button))
@@ -8861,8 +8989,6 @@ impl ThreadView {
             })
             .unwrap_or_else(|| (false, false, focus_handle.clone()));
 
-        let use_card_layout = needs_confirmation || is_edit || is_terminal_tool;
-
         let has_image_content = tool_call.content().iter().any(|c| c.image().is_some());
 
         let should_show_raw_input = !is_terminal_tool && !is_edit && !has_image_content;
@@ -8875,6 +9001,7 @@ impl ThreadView {
             .entry_view_state
             .read(cx)
             .is_tool_call_content_visible(tool_call);
+        let use_card_layout = needs_confirmation || is_terminal_tool || (is_edit && is_open);
 
         let input_output_header = |label: SharedString| {
             Label::new(label)
@@ -9130,7 +9257,7 @@ impl ThreadView {
                             .when(use_card_layout, |this| {
                                 this.p_0p5()
                                     .rounded_t(rems_from_px(5_f32))
-                                    .bg(self.tool_card_header_bg(cx))
+                                    .bg(self.tool_card_header_bg(cx).opacity(0.4))
                             })
                             .child(self.render_tool_call_label(
                                 entry_ix,
@@ -9165,7 +9292,6 @@ impl ThreadView {
                                                         )
                                                         .opened_icon(IconName::ChevronUp)
                                                         .closed_icon(IconName::ChevronDown)
-                                                        .visible_on_hover(&card_header_id)
                                                         .on_click(cx.listener({
                                                             let id = tool_call.id.clone();
                                                             move |this: &mut Self,
@@ -11819,7 +11945,7 @@ impl ThreadView {
     }
 
     fn tool_card_border_color(&self, cx: &Context<Self>) -> Hsla {
-        cx.theme().colors().border.opacity(0.8)
+        cx.theme().colors().border_variant.opacity(0.6)
     }
 
     fn tool_name_font_size(&self) -> Rems {
@@ -13017,6 +13143,8 @@ impl Render for ThreadView {
         let list_state = self.list_state.clone();
 
         let conversation = v_flex()
+            .flex_1()
+            .min_h_0()
             .when(self.resumed_without_history, |this| {
                 this.child(Self::render_resume_notice(cx))
             })
@@ -13028,7 +13156,28 @@ impl Render for ThreadView {
                         .vertical_scrollbar_for(&list_state, window, cx)
                         .into_any()
                 } else {
-                    this.into_any()
+                    this.justify_center()
+                        .items_center()
+                        .gap_2()
+                        .px_6()
+                        .child(
+                            Icon::new(self.agent_icon)
+                                .size(IconSize::XLarge)
+                                .color(Color::Muted),
+                        )
+                        .child(Label::new("How can I help?").color(Color::Muted))
+                        .child(
+                            Label::new(
+                                if self.session_capabilities.read().has_slash_completions() {
+                                    "@ to add context · / for commands"
+                                } else {
+                                    "@ to add context"
+                                },
+                            )
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                        )
+                        .into_any()
                 }
             });
 

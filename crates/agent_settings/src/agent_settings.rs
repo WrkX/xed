@@ -291,7 +291,7 @@ impl AgentSettings {
     }
 
     pub fn set_message_editor_max_lines(&self) -> usize {
-        self.message_editor_min_lines * 2
+        self.message_editor_min_lines.saturating_mul(2).max(8)
     }
 
     pub fn favorite_model_ids(&self) -> HashSet<SharedString> {

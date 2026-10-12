@@ -1151,8 +1151,8 @@
     // Default action when clicking a changed file in the Git panel.
     //
     // Choices: project_diff, file_diff, view_file
-    // Default: project_diff
-    "entry_primary_click_action": "project_diff",
+    // Default: file_diff
+    "entry_primary_click_action": "file_diff",
     // Whether the commit message editor is shown in the git panel by default.
     //
     // Choices: expanded, collapsed
@@ -1405,8 +1405,8 @@
     "use_modifier_to_send": false,
     // Minimum number of lines to display in the agent message editor.
     //
-    // Default: 4
-    "message_editor_min_lines": 4,
+    // Default: 2
+    "message_editor_min_lines": 2,
     // Whether to show turn statistics (elapsed time during generation, final turn duration).
     //
     // Default: false

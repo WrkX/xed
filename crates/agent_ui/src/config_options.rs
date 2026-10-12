@@ -40,6 +40,33 @@ pub struct ConfigOptionsView {
 }
 
 impl ConfigOptionsView {
+    pub(crate) fn render_model_selector(&self, cx: &App) -> AnyElement {
+        self.render_selectors(true, cx)
+    }
+
+    pub(crate) fn render_other_options(&self, cx: &App) -> AnyElement {
+        self.render_selectors(false, cx)
+    }
+
+    fn render_selectors(&self, model_options: bool, cx: &App) -> AnyElement {
+        h_flex()
+            .min_w_0()
+            .when(!model_options, |this| this.flex_wrap())
+            .gap_1()
+            .children(
+                self.selectors
+                    .iter()
+                    .filter(|selector| {
+                        let is_model = selector.read(cx).current_option().is_some_and(|option| {
+                            option.category == Some(acp::SessionConfigOptionCategory::Model)
+                        });
+                        is_model == model_options
+                    })
+                    .cloned(),
+            )
+            .into_any_element()
+    }
+
     pub fn new(
         config_options: Rc<dyn AgentSessionConfigOptions>,
         agent_server: Rc<dyn AgentServer>,
@@ -450,6 +477,11 @@ impl ConfigOptionSelector {
         )
         .label_size(LabelSize::Small)
         .color(Color::Muted)
+        .truncate(true)
+        .when(
+            option.category == Some(acp::SessionConfigOptionCategory::Model),
+            |this| this.width(rems(8.0)),
+        )
         .end_icon(Icon::new(icon).size(IconSize::XSmall).color(Color::Muted))
         .disabled(self.setting_value)
     }

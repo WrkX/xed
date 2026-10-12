@@ -811,7 +811,7 @@ pub struct GitPanelSettingsContent {
 
     /// Default action when clicking a changed file in the Git panel.
     ///
-    /// Default: project_diff
+    /// Default: file_diff
     pub entry_primary_click_action: Option<GitPanelClickBehavior>,
 
     /// Whether the commit message editor is shown in the Git panel by default.
@@ -860,9 +860,9 @@ pub enum GitPanelCommitEditor {
 #[serde(rename_all = "snake_case")]
 pub enum GitPanelClickBehavior {
     /// Open the project diff, showing all changed files.
-    #[default]
     ProjectDiff,
     /// Open a single-file diff view.
+    #[default]
     FileDiff,
     /// Open the file in the editor without a diff view.
     ViewFile,
