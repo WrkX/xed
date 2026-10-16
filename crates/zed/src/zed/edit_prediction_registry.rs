@@ -2,7 +2,7 @@ use client::{Client, UserStore};
 use codestral::{CodestralEditPredictionDelegate, load_codestral_api_key};
 use collections::HashMap;
 use copilot::CopilotEditPredictionDelegate;
-use edit_prediction::{EditPredictionModel, ZedEditPredictionDelegate, fim};
+use edit_prediction::{EditPredictionModel, ZedEditPredictionDelegate, fim, local_gguf_models};
 use editor::{EditPredictionRequestTrigger, Editor};
 use gpui::{AnyWindowHandle, App, AppContext as _, Context, Entity, WeakEntity};
 use language::language_settings::{
@@ -94,6 +94,22 @@ pub fn init(client: Arc<Client>, user_store: Entity<UserStore>, cx: &mut App) {
                 );
 
                 previous_config = new_provider_config;
+
+                // A generation started by the previous provider is now stale, so
+                // abort it rather than letting it finish in the background.
+                if let Some(ep_store) = edit_prediction::EditPredictionStore::try_global(cx) {
+                    ep_store.update(cx, |ep_store, _cx| ep_store.cancel_pending_predictions());
+                }
+
+                // Leaving the on-device provider should not keep the model (and
+                // its Metal context) resident.
+                if !matches!(
+                    new_provider_config,
+                    Some(EditPredictionProviderConfig::LocalGguf(_))
+                ) {
+                    edit_prediction::unload_local_gguf_model();
+                }
+
                 assign_edit_prediction_providers(
                     &editors,
                     new_provider_config,
@@ -151,6 +167,18 @@ fn edit_prediction_provider_config_for_settings(cx: &App) -> Option<EditPredicti
         EditPredictionProvider::Mercury => Some(EditPredictionProviderConfig::Zed(
             EditPredictionModel::Mercury,
         )),
+        EditPredictionProvider::LocalGguf => Some(EditPredictionProviderConfig::LocalGguf(
+            local_gguf_edit_prediction_model(settings.local_gguf.model_path.as_deref()),
+        )),
+    }
+}
+
+/// The model used by the on-device Local GGUF provider.
+fn local_gguf_edit_prediction_model(path: Option<&std::path::Path>) -> EditPredictionModel {
+    match local_gguf_models::prompt_format_for_model_path(path) {
+        EditPredictionPromptFormat::Zeta(_) => EditPredictionModel::Zeta,
+        EditPredictionPromptFormat::Sweep => EditPredictionModel::SweepPrompt,
+        format => EditPredictionModel::Fim { format },
     }
 }
 
@@ -159,6 +187,7 @@ enum EditPredictionProviderConfig {
     Copilot,
     Codestral,
     Zed(EditPredictionModel),
+    LocalGguf(EditPredictionModel),
 }
 
 impl EditPredictionProviderConfig {
@@ -172,6 +201,7 @@ impl EditPredictionProviderConfig {
                 EditPredictionModel::SweepPrompt => "Sweep Prompt",
                 EditPredictionModel::Mercury => "Mercury",
             },
+            EditPredictionProviderConfig::LocalGguf(_) => "Local GGUF",
         }
     }
 }
@@ -265,6 +295,31 @@ fn assign_edit_prediction_provider(
                     return;
                 }
             }
+
+            if let Some(project) = editor.project() {
+                ep_store.update(cx, |ep_store, cx| {
+                    ep_store.set_edit_prediction_model(model);
+                    if let Some(buffer) = &singleton_buffer {
+                        ep_store.register_buffer(buffer, project, cx);
+                    }
+                });
+
+                let provider = cx.new(|cx| {
+                    ZedEditPredictionDelegate::new(
+                        project.clone(),
+                        singleton_buffer,
+                        &client,
+                        &user_store,
+                        cx,
+                    )
+                });
+                editor.set_edit_prediction_provider(Some(provider), trigger, window, cx);
+            }
+        }
+        Some(EditPredictionProviderConfig::LocalGguf(model)) => {
+            // Local inference runs entirely in-process and is never gated by
+            // cloud/organization subscription checks.
+            let ep_store = edit_prediction::EditPredictionStore::global(client, &user_store, cx);
 
             if let Some(project) = editor.project() {
                 ep_store.update(cx, |ep_store, cx| {
@@ -483,5 +538,59 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    async fn test_local_gguf_provider_routes_to_qwen_fim_model(cx: &mut TestAppContext) {
+        let app_state = cx.update(|cx| {
+            let app_state = AppState::test(cx);
+            client::init(&app_state.client, cx);
+            language_model::init(cx);
+            app_state
+        });
+
+        cx.update(|cx| {
+            cx.update_global::<SettingsStore, _>(|store: &mut SettingsStore, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.project.all_languages.edit_predictions =
+                        Some(settings::EditPredictionSettingsContent {
+                            provider: Some(EditPredictionProvider::LocalGguf),
+                            ..Default::default()
+                        });
+                });
+            });
+        });
+
+        let config = cx.update(|cx| edit_prediction_provider_config_for_settings(cx));
+        assert!(
+            matches!(config, Some(EditPredictionProviderConfig::LocalGguf(_))),
+            "expected local_gguf to route to a dedicated provider config"
+        );
+        assert_eq!(config.map(|config| config.name()), Some("Local GGUF"));
+
+        // The provider must use the Qwen FIM format and must not be routed
+        // through the cloud-gated `Zed` config.
+        assert!(matches!(
+            local_gguf_edit_prediction_model(None),
+            EditPredictionModel::Fim {
+                format: EditPredictionPromptFormat::Qwen,
+            }
+        ));
+
+        for pin in local_gguf_models::MODEL_CATALOG {
+            let path = std::path::Path::new(pin.file_name);
+            let model = local_gguf_edit_prediction_model(Some(path));
+            match pin.prompt_format {
+                EditPredictionPromptFormat::Sweep => {
+                    assert!(matches!(model, EditPredictionModel::SweepPrompt))
+                }
+                EditPredictionPromptFormat::Zeta(_) => {
+                    assert!(matches!(model, EditPredictionModel::Zeta))
+                }
+                format => assert!(model == EditPredictionModel::Fim { format }),
+            }
+        }
+
+        drop(app_state);
     }
 }

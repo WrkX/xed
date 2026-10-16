@@ -99,6 +99,7 @@ pub enum EditPredictionProvider {
     Ollama,
     OpenAiCompatibleApi,
     Mercury,
+    LocalGguf,
 }
 
 impl EditPredictionProvider {
@@ -110,7 +111,8 @@ impl EditPredictionProvider {
             | EditPredictionProvider::Codestral
             | EditPredictionProvider::Ollama
             | EditPredictionProvider::OpenAiCompatibleApi
-            | EditPredictionProvider::Mercury => false,
+            | EditPredictionProvider::Mercury
+            | EditPredictionProvider::LocalGguf => false,
         }
     }
 
@@ -123,6 +125,7 @@ impl EditPredictionProvider {
             EditPredictionProvider::None => None,
             EditPredictionProvider::Ollama => Some("Ollama"),
             EditPredictionProvider::OpenAiCompatibleApi => Some("OpenAI-Compatible API"),
+            EditPredictionProvider::LocalGguf => Some("Local GGUF (On-device)"),
         }
     }
 }
@@ -171,6 +174,8 @@ pub struct EditPredictionSettingsContent {
     pub zed: Option<ZedEditPredictionSettingsContent>,
     /// Settings specific to the Mercury Edit Predictions provider.
     pub mercury: Option<MercuryEditPredictionSettingsContent>,
+    /// Settings specific to the on-device Local GGUF provider.
+    pub local_gguf: Option<LocalGgufEditPredictionSettingsContent>,
     /// Controls whether Zed may collect training data when using Zed's Edit Predictions.
     /// Data is only ever captured for files in projects that are detected as open source.
     ///
@@ -310,6 +315,27 @@ pub struct MercuryEditPredictionSettingsContent {
     /// after typing stops. Set to 0 to request predictions immediately.
     ///
     /// Default: 0
+    pub prediction_debounce: Option<DelayMs>,
+}
+
+/// Settings specific to the on-device Local GGUF Edit Predictions provider.
+#[with_fallible_options]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq)]
+pub struct LocalGgufEditPredictionSettingsContent {
+    /// Path to the GGUF model file to run locally.
+    ///
+    /// A leading `~` is expanded to your home folder.
+    ///
+    /// Default: none
+    pub model_path: Option<String>,
+    /// Maximum tokens to generate for each prediction.
+    ///
+    /// Default: 64
+    pub max_output_tokens: Option<u32>,
+    /// The debounce delay in milliseconds before automatically requesting a prediction
+    /// after typing stops. Set to 0 to request predictions immediately.
+    ///
+    /// Default: 250
     pub prediction_debounce: Option<DelayMs>,
 }
 

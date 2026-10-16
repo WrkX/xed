@@ -24,7 +24,12 @@ pub use settings::{
 };
 use settings::{RegisterSetting, Settings, SettingsLocation, SettingsStore, merge_from::MergeFrom};
 use shellexpand;
-use std::{num::NonZeroU32, path::Path, sync::Arc, time::Duration};
+use std::{
+    num::NonZeroU32,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use text::ToOffset;
 
 /// Returns the settings for all languages from the provided file.
@@ -536,6 +541,8 @@ pub struct EditPredictionSettings {
     pub zed: ZedEditPredictionSettings,
     /// Settings specific to the Mercury Edit Predictions provider.
     pub mercury: MercuryEditPredictionSettings,
+    /// Settings specific to the on-device Local GGUF Edit Predictions provider.
+    pub local_gguf: LocalGgufEditPredictionSettings,
     /// Controls whether training data collection is enabled.
     ///
     /// `Default` means the value stored in the legacy KV store is used as a fallback,
@@ -571,6 +578,7 @@ impl EditPredictionSettings {
                 .map_or_else(DelayMs::default, |settings| settings.prediction_debounce),
             settings::EditPredictionProvider::Zed => self.zed.prediction_debounce,
             settings::EditPredictionProvider::Mercury => self.mercury.prediction_debounce,
+            settings::EditPredictionProvider::LocalGguf => self.local_gguf.prediction_debounce,
             settings::EditPredictionProvider::None => DelayMs::default(),
         };
         Duration::from_millis(delay.0)
@@ -630,6 +638,17 @@ pub struct ZedEditPredictionSettings {
 /// Settings specific to the Mercury Edit Predictions provider.
 #[derive(Clone, Debug, Default)]
 pub struct MercuryEditPredictionSettings {
+    /// Automatic prediction debounce delay.
+    pub prediction_debounce: DelayMs,
+}
+
+/// Settings specific to the on-device Local GGUF Edit Predictions provider.
+#[derive(Clone, Debug, Default)]
+pub struct LocalGgufEditPredictionSettings {
+    /// Path to the GGUF model file to run locally, if configured.
+    pub model_path: Option<PathBuf>,
+    /// Maximum tokens to generate for each prediction.
+    pub max_output_tokens: u32,
     /// Automatic prediction debounce delay.
     pub prediction_debounce: DelayMs,
 }
@@ -998,6 +1017,12 @@ impl settings::Settings for AllLanguageSettings {
         let zed_settings = edit_predictions.zed.unwrap();
         let mercury_settings = edit_predictions.mercury.unwrap();
 
+        let local_gguf_settings = edit_predictions.local_gguf.unwrap();
+        let local_gguf_model_path = local_gguf_settings
+            .model_path
+            .filter(|path| !path.is_empty())
+            .map(|path| PathBuf::from(shellexpand::tilde(&path).into_owned()));
+
         let mut file_types: FxHashMap<Arc<str>, (GlobSet, Vec<String>)> = FxHashMap::default();
 
         for (language, patterns) in all_languages.file_types.iter().flatten() {
@@ -1055,6 +1080,11 @@ impl settings::Settings for AllLanguageSettings {
                 },
                 mercury: MercuryEditPredictionSettings {
                     prediction_debounce: mercury_settings.prediction_debounce.unwrap(),
+                },
+                local_gguf: LocalGgufEditPredictionSettings {
+                    model_path: local_gguf_model_path,
+                    max_output_tokens: local_gguf_settings.max_output_tokens.unwrap(),
+                    prediction_debounce: local_gguf_settings.prediction_debounce.unwrap(),
                 },
                 allow_data_collection: edit_predictions.allow_data_collection.unwrap_or_default(),
             },

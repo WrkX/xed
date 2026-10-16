@@ -85,6 +85,15 @@ else
     exit 1
 fi
 
+# The on-device edit prediction engine (local_gguf) builds vendored llama.cpp with
+# CMake on Apple silicon. Fail early with an actionable message instead of deep
+# inside a build script; other targets compile its stub and need no native toolchain.
+if [[ "$target_triple" = "aarch64-apple-darwin" ]] && ! command -v cmake >/dev/null 2>&1; then
+    echo "Error: cmake is required to build the on-device Metal engine (local_gguf)."
+    echo "Install it with: ./script/install-cmake"
+    exit 1
+fi
+
 # Generate the licenses first, so they can be baked into the binaries
 script/generate-licenses
 

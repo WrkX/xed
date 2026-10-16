@@ -260,6 +260,10 @@ pub fn clippy(platform: Platform, target: Option<&str>) -> Step<Run> {
     }
 }
 
+pub fn install_cmake() -> Step<Run> {
+    named::bash("command -v cmake >/dev/null 2>&1 || ./script/install-cmake")
+}
+
 pub fn install_rustup_target(target: &str) -> Step<Run> {
     named::bash(format!("rustup target add {target}"))
 }

@@ -3,7 +3,7 @@ use client::{Client, UserStore, zed_urls};
 use cloud_llm_client::UsageLimit;
 use codestral::{self, CodestralEditPredictionDelegate};
 use copilot::Status;
-use edit_prediction::EditPredictionStore;
+use edit_prediction::{EditPredictionStore, local_gguf_models::LocalGgufModelManager};
 use edit_prediction_types::EditPredictionDelegateHandle;
 use editor::{
     Editor, MultiBufferOffset, SelectionEffects, actions::ShowEditPrediction, scroll::Autoscroll,
@@ -328,6 +328,65 @@ impl Render for EditPredictionButton {
                                     _ => {
                                         "Ollama model not configured — configure a model before use"
                                             .to_string()
+                                    }
+                                };
+
+                                Tooltip::with_meta(
+                                    "Edit Prediction",
+                                    Some(&ToggleMenu),
+                                    tooltip_meta,
+                                    cx,
+                                )
+                            },
+                        )
+                        .with_handle(self.popover_menu_handle.clone()),
+                )
+            }
+            EditPredictionProvider::LocalGguf => {
+                let enabled = self.editor_enabled.unwrap_or(true);
+                let this = cx.weak_entity();
+
+                div().child(
+                    PopoverMenu::new("local-gguf")
+                        .menu(move |window, cx| {
+                            this.update(cx, |this, cx| {
+                                this.build_edit_prediction_context_menu(
+                                    EditPredictionProvider::LocalGguf,
+                                    window,
+                                    cx,
+                                )
+                            })
+                            .ok()
+                        })
+                        .anchor(Anchor::BottomRight)
+                        .trigger_with_tooltip(
+                            IconButton::new("local-gguf-icon", IconName::AiOpenAiCompat)
+                                .shape(IconButtonShape::Square)
+                                .tab_index(0isize)
+                                .aria_label("Edit Prediction")
+                                .when(!enabled, |this| {
+                                    this.indicator(Indicator::dot().color(Color::Ignored))
+                                        .indicator_border_color(Some(
+                                            cx.theme().colors().status_bar_background,
+                                        ))
+                                }),
+                            move |_window, cx| {
+                                // Prefer the model manager's view of the world, so the
+                                // tooltip reflects download/validation state. Fall back
+                                // to the raw setting when the manager is unavailable.
+                                let tooltip_meta = match LocalGgufModelManager::try_global(cx) {
+                                    Some(manager) => manager.read(cx).summary(cx),
+                                    None => {
+                                        let settings = all_language_settings(None, cx);
+                                        match settings.edit_predictions.local_gguf.model_path.as_ref()
+                                        {
+                                            Some(path) => {
+                                                format!("On-device inference ({})", path.display())
+                                                    .into()
+                                            }
+                                            None => "No local model configured — choose a GGUF model in settings"
+                                                .into(),
+                                        }
                                     }
                                 };
 
@@ -1613,6 +1672,11 @@ pub fn get_available_providers(cx: &mut App) -> Vec<EditPredictionProvider> {
         .has_key()
     {
         providers.push(EditPredictionProvider::Mercury);
+    }
+
+    // On-device inference is only supported on macOS Apple Silicon for now.
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        providers.push(EditPredictionProvider::LocalGguf);
     }
 
     providers

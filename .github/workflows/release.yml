@@ -25,6 +25,8 @@ jobs:
       run: |
         mkdir -p ./../.cargo
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
+    - name: steps::install_cmake
+      run: command -v cmake >/dev/null 2>&1 || ./script/install-cmake
     - name: steps::cache_rust_dependencies_namespace
       uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
       with:
@@ -186,6 +188,8 @@ jobs:
         R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
         R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         SCCACHE_BUCKET: sccache-zed
+    - name: steps::install_cmake
+      run: command -v cmake >/dev/null 2>&1 || ./script/install-cmake
     - name: steps::clippy
       run: ./script/clippy
     - name: steps::show_sccache_stats
@@ -584,6 +588,8 @@ jobs:
         printf 'DEVELOPER_DIR=%s\n' "${DEVELOPER_DIR-<unset>}"
         printf 'SDKROOT=%s\n' "${SDKROOT-<unset>}"
         printf 'MACOSX_DEPLOYMENT_TARGET=%s\n' "${MACOSX_DEPLOYMENT_TARGET-<unset>}"
+    - name: steps::install_cmake
+      run: command -v cmake >/dev/null 2>&1 || ./script/install-cmake
     - name: run_bundling::bundle_mac::bundle_mac
       run: ./script/bundle-mac aarch64-apple-darwin
     - name: run_bundling::upload_artifact

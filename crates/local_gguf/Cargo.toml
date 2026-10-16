@@ -1,0 +1,48 @@
+[package]
+name = "local_gguf"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/local_gguf.rs"
+doctest = false
+
+[features]
+default = []
+# Enables the real in-process llama.cpp (Metal) engine. The native dependency is
+# declared for Apple silicon only, so enabling this feature on any other target is
+# a no-op and the crate compiles the stub in `src/engine.rs` instead. This keeps
+# `cargo --all-features` (used by `./script/clippy`) from pulling the C++/Metal
+# toolchain into non-Apple builds.
+metal = ["dep:llama-cpp-2"]
+
+[dependencies]
+flume.workspace = true
+log.workspace = true
+thiserror.workspace = true
+
+# Pinned exactly; llama-cpp-sys-2 vendors the llama.cpp sources it builds.
+# Declared only for Apple silicon so every other target keeps compiling the stub
+# even when the `metal` feature is enabled (for example by `--all-features`).
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+llama-cpp-2 = { version = "=0.1.159", default-features = false, features = [
+    "metal",
+    "sampler",
+    "common",
+], optional = true }
+
+[dev-dependencies]
+libc.workspace = true
+smol.workspace = true
+tempfile.workspace = true
+
+# A model-backed measurement harness. Gated on `LOCAL_GGUF_TEST_MODEL` at runtime
+# and on the `metal` feature at build time, so it is skipped on other targets.
+[[example]]
+name = "local_gguf_benchmark"
+required-features = ["metal"]

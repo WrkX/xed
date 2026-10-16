@@ -646,6 +646,10 @@ pub(crate) fn clippy(platform: Platform, arch: Option<Arch>, harden: bool) -> Na
             this.add_step(steps::install_rustup_target(target))
         })
         .add_step(steps::setup_sccache(platform))
+        .when(
+            platform == Platform::Mac && arch != Some(Arch::X86_64),
+            |job| job.add_step(steps::install_cmake()),
+        )
         .add_step(steps::clippy(platform, target))
         .add_step(steps::show_sccache_stats(platform));
     if platform == Platform::Linux {
@@ -698,6 +702,9 @@ fn run_platform_tests_impl(platform: Platform, filter_packages: bool, harden: bo
             })
             .add_step(steps::checkout_repo())
             .add_step(steps::setup_cargo_config(platform))
+            .when(platform == Platform::Mac, |job| {
+                job.add_step(steps::install_cmake())
+            })
             .when(platform == Platform::Mac, |this| {
                 this.add_step(steps::cache_rust_dependencies_namespace())
             })

@@ -5,6 +5,7 @@ use crate::{
     ZedUpdateRequiredError, buffer_path_with_id_fallback,
     cursor_excerpt::{self, compute_cursor_excerpt, compute_syntax_ranges},
     data_collection::CapturedPredictionContext,
+    fim::local_gguf_transport,
     prediction::EditPredictionResult,
     udiff::prediction_edits_for_single_file_diff,
 };
@@ -72,9 +73,15 @@ pub(crate) fn request_prediction_with_zeta(
         _ => None,
     };
 
+    let local_transport = (provider == settings::EditPredictionProvider::LocalGguf)
+        .then(|| local_gguf_transport(settings.local_gguf.clone(), cx));
     let http_client = cx.http_client();
     let request_start = cx.background_executor().now();
-    let raw_config = store.zeta2_raw_config().cloned();
+    let raw_config = if local_transport.is_some() {
+        None
+    } else {
+        store.zeta2_raw_config().cloned()
+    };
     let preferred_experiment = store.preferred_experiment().map(|s| s.to_owned());
     let open_ai_compatible_api_key = load_open_ai_compatible_api_key_if_needed(provider, cx);
 
@@ -111,21 +118,25 @@ pub(crate) fn request_prediction_with_zeta(
     let project_for_request = project.clone();
     let request_task = cx.background_spawn({
         async move {
-            let local_zeta_version = custom_server_settings
-                .as_ref()
-                .and_then(|settings| match settings.prompt_format {
-                    EditPredictionPromptFormat::Zeta(version) => Some(version),
-                    EditPredictionPromptFormat::Infer => {
-                        match settings.model.to_ascii_lowercase().as_str() {
-                            "zeta" | "zeta1" => Some(ZetaVersion::Zeta1),
-                            "zeta2" => Some(ZetaVersion::Zeta2),
-                            "zeta2.1" => Some(ZetaVersion::Zeta2_1),
-                            _ => None,
+            let local_zeta_version = if local_transport.is_some() {
+                ZetaVersion::Zeta2_1
+            } else {
+                custom_server_settings
+                    .as_ref()
+                    .and_then(|settings| match settings.prompt_format {
+                        EditPredictionPromptFormat::Zeta(version) => Some(version),
+                        EditPredictionPromptFormat::Infer => {
+                            match settings.model.to_ascii_lowercase().as_str() {
+                                "zeta" | "zeta1" => Some(ZetaVersion::Zeta1),
+                                "zeta2" => Some(ZetaVersion::Zeta2),
+                                "zeta2.1" => Some(ZetaVersion::Zeta2_1),
+                                _ => None,
+                            }
                         }
-                    }
-                    _ => None,
-                })
-                .unwrap_or_default();
+                        _ => None,
+                    })
+                    .unwrap_or_default()
+            };
             let zeta_format = raw_config
                 .as_ref()
                 .map(|config| config.format)
@@ -146,55 +157,58 @@ pub(crate) fn request_prediction_with_zeta(
             }
 
             let cursor_offset = position.to_offset(&snapshot);
-            let request_input =
-                if allow_jump && custom_server_settings.is_none() && raw_config.is_none() {
-                    let cursor_point = snapshot.offset_to_point(cursor_offset);
-                    let editable_context = editable_context
-                        .context("missing editable context task")?
-                        .await?;
-                    let active_buffer_diagnostics = active_buffer_diagnostics(
-                        &snapshot,
-                        diagnostic_search_range,
-                        cursor_point.row,
-                        ACTIVE_BUFFER_DIAGNOSTIC_ADDITIONAL_CONTEXT_TOKEN_COUNT,
-                    );
-                    let syntax_ranges =
-                        compute_syntax_ranges(&snapshot, cursor_offset, &(0..snapshot.len()));
+            let request_input = if allow_jump
+                && local_transport.is_none()
+                && custom_server_settings.is_none()
+                && raw_config.is_none()
+            {
+                let cursor_point = snapshot.offset_to_point(cursor_offset);
+                let editable_context = editable_context
+                    .context("missing editable context task")?
+                    .await?;
+                let active_buffer_diagnostics = active_buffer_diagnostics(
+                    &snapshot,
+                    diagnostic_search_range,
+                    cursor_point.row,
+                    ACTIVE_BUFFER_DIAGNOSTIC_ADDITIONAL_CONTEXT_TOKEN_COUNT,
+                );
+                let syntax_ranges =
+                    compute_syntax_ranges(&snapshot, cursor_offset, &(0..snapshot.len()));
 
-                    RequestInput::V4(Zeta3PromptInput {
-                        cursor_path: excerpt_path,
-                        cursor_position: FilePosition {
-                            row: cursor_point.row,
-                            column: cursor_point.column,
-                        },
-                        events,
-                        editable_context,
-                        syntax_ranges,
-                        active_buffer_diagnostics,
-                        in_open_source_repo: is_open_source,
-                        can_collect_data,
-                        repo_url,
-                    })
-                } else {
-                    let (full_context_offset_range, prompt_input) = zeta2_prompt_input(
-                        &snapshot,
-                        related_files,
-                        events,
-                        diagnostic_search_range,
-                        excerpt_path,
-                        cursor_offset,
-                        is_open_source,
-                        can_collect_data,
-                        repo_url,
-                    );
-                    let formatted_prompt = format_zeta_prompt(&prompt_input, zeta_format);
+                RequestInput::V4(Zeta3PromptInput {
+                    cursor_path: excerpt_path,
+                    cursor_position: FilePosition {
+                        row: cursor_point.row,
+                        column: cursor_point.column,
+                    },
+                    events,
+                    editable_context,
+                    syntax_ranges,
+                    active_buffer_diagnostics,
+                    in_open_source_repo: is_open_source,
+                    can_collect_data,
+                    repo_url,
+                })
+            } else {
+                let (full_context_offset_range, prompt_input) = zeta2_prompt_input(
+                    &snapshot,
+                    related_files,
+                    events,
+                    diagnostic_search_range,
+                    excerpt_path,
+                    cursor_offset,
+                    is_open_source,
+                    can_collect_data,
+                    repo_url,
+                );
+                let formatted_prompt = format_zeta_prompt(&prompt_input, zeta_format);
 
-                    RequestInput::V3 {
-                        full_context_offset_range,
-                        prompt_input,
-                        formatted_prompt,
-                    }
-                };
+                RequestInput::V3 {
+                    full_context_offset_range,
+                    prompt_input,
+                    formatted_prompt,
+                }
+            };
 
             if let Some(debug_tx) = &debug_tx {
                 let prompt = match &request_input {
@@ -256,7 +270,34 @@ pub(crate) fn request_prediction_with_zeta(
             };
 
             let Some((request_id, output, model_version, usage)) =
-                (if let Some(custom_settings) = &custom_server_settings {
+                (if let Some(transport) = local_transport {
+                    let Some(prompt) = formatted_prompt.clone() else {
+                        return Ok((None, None));
+                    };
+                    let prefill = get_prefill(&prompt_input, zeta_format);
+                    let Some((response_text, request_id)) = transport
+                        .send(
+                            format!("{prompt}{prefill}"),
+                            stop_tokens_for_format(zeta_format)
+                                .iter()
+                                .map(|token| token.to_string())
+                                .collect(),
+                        )
+                        .await?
+                    else {
+                        return Ok((None, None));
+                    };
+                    let output = if response_text.is_empty() {
+                        None
+                    } else {
+                        Some(parse_zeta2_model_output(
+                            &format!("{prefill}{response_text}"),
+                            zeta_format,
+                            &prompt_input,
+                        )?)
+                    };
+                    Some((EditPredictionId(request_id.into()), output, None, None))
+                } else if let Some(custom_settings) = &custom_server_settings {
                     let max_tokens = custom_settings.max_output_tokens * 4;
 
                     Some(match local_zeta_version {

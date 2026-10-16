@@ -11,7 +11,8 @@ use crate::{
     DebugEvent, EditPredictionFinishedDebugEvent, EditPredictionId, EditPredictionInputs,
     EditPredictionModelInput, EditPredictionResult, EditPredictionStartedDebugEvent, StoredEvent,
     cursor_excerpt::fixed_line_window_around_cursor,
-    open_ai_compatible::{self, load_open_ai_compatible_api_key_if_needed},
+    fim::{CompletionTransport, local_gguf_transport},
+    open_ai_compatible::load_open_ai_compatible_api_key_if_needed,
     zeta,
 };
 
@@ -49,20 +50,33 @@ pub fn request_prediction(
 ) -> Task<Result<Option<EditPredictionResult>>> {
     let settings = &all_language_settings(None, cx).edit_predictions;
     let provider = settings.provider;
-    let Some(custom_settings) = (match provider {
-        settings::EditPredictionProvider::Ollama => settings.ollama.clone(),
-        settings::EditPredictionProvider::OpenAiCompatibleApi => {
-            settings.open_ai_compatible_api.clone()
+    let transport = match provider {
+        settings::EditPredictionProvider::LocalGguf => {
+            local_gguf_transport(settings.local_gguf.clone(), cx)
         }
-        _ => None,
-    }) else {
-        return Task::ready(Err(anyhow!(
-            "Unsupported edit prediction provider for Sweep prompt mode"
-        )));
+        settings::EditPredictionProvider::Ollama
+        | settings::EditPredictionProvider::OpenAiCompatibleApi => {
+            let custom_settings = match provider {
+                settings::EditPredictionProvider::Ollama => settings.ollama.clone(),
+                _ => settings.open_ai_compatible_api.clone(),
+            };
+            let Some(settings) = custom_settings else {
+                return Task::ready(Err(anyhow!("Missing Sweep provider settings")));
+            };
+            CompletionTransport::Remote {
+                provider,
+                settings,
+                api_key: load_open_ai_compatible_api_key_if_needed(provider, cx),
+                http_client: cx.http_client(),
+            }
+        }
+        _ => {
+            return Task::ready(Err(anyhow!(
+                "Unsupported edit prediction provider for Sweep prompt mode"
+            )));
+        }
     };
 
-    let api_key = load_open_ai_compatible_api_key_if_needed(provider, cx);
-    let http_client = cx.http_client();
     let buffer_snapshotted_at = Instant::now();
 
     let EditPredictionModelInput {
@@ -136,28 +150,26 @@ pub fn request_prediction(
     };
 
     let current_window = prompt_input.current_window;
-    let request_task: Task<Result<(String, String, Instant)>> = cx.background_spawn(async move {
-        let (response_text, request_id) = open_ai_compatible::send_custom_server_request(
-            provider,
-            &custom_settings,
-            prompt,
-            custom_settings.max_output_tokens,
-            RESERVED_SWEEP_TOKENS.map(str::to_string).to_vec(),
-            api_key,
-            &http_client,
-        )
-        .await
-        .context("sweep prompt request failed")?;
+    let request_task = cx.background_spawn(async move {
+        let Some((response_text, request_id)) = transport
+            .send(prompt, RESERVED_SWEEP_TOKENS.map(str::to_string).to_vec())
+            .await
+            .context("sweep prompt request failed")?
+        else {
+            return anyhow::Ok(None);
+        };
         let response_received_at = Instant::now();
-        Ok((
+        Ok(Some((
             request_id,
             clean_response_text(&response_text),
             response_received_at,
-        ))
+        )))
     });
 
     cx.spawn(async move |cx| {
-        let (request_id, response_text, response_received_at) = request_task.await?;
+        let Some((request_id, response_text, response_received_at)) = request_task.await? else {
+            return Ok(None);
+        };
 
         if let Some(debug_tx) = &debug_tx {
             debug_tx

@@ -104,6 +104,9 @@ pub(crate) fn bundle_mac(
             .add_step(steps::setup_sentry())
             .add_step(steps::clear_target_dir_if_large(runners::Platform::Mac))
             .add_step(print_macos_toolchain())
+            .when(arch == Arch::AARCH64, |job| {
+                job.add_step(steps::install_cmake())
+            })
             .add_step(bundle_mac(arch))
             .add_step(upload_artifact(&format!(
                 "target/{target}/release/{artifact_name}"

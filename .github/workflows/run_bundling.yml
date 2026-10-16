@@ -217,6 +217,8 @@ jobs:
         printf 'DEVELOPER_DIR=%s\n' "${DEVELOPER_DIR-<unset>}"
         printf 'SDKROOT=%s\n' "${SDKROOT-<unset>}"
         printf 'MACOSX_DEPLOYMENT_TARGET=%s\n' "${MACOSX_DEPLOYMENT_TARGET-<unset>}"
+    - name: steps::install_cmake
+      run: command -v cmake >/dev/null 2>&1 || ./script/install-cmake
     - name: run_bundling::bundle_mac::bundle_mac
       run: ./script/bundle-mac aarch64-apple-darwin
     - name: run_bundling::upload_artifact

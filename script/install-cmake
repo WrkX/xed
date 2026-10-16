@@ -18,9 +18,11 @@
 set -euo pipefail
 
 
-if [[ "$(uname -s)" == "darwin" ]]; then
-  brew --version >/dev/null \
-    || echo "Error: Homebrew is required to install cmake on MacOS." && exit 1
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "Error: Homebrew is required to install cmake on MacOS."
+    exit 1
+  fi
   echo "Installing cmake via Homebrew (can't pin to old versions)."
   brew install cmake
   exit 0

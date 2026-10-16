@@ -1,6 +1,7 @@
 use codestral::{CODESTRAL_API_URL, codestral_api_key_state, codestral_api_url};
 use edit_prediction::{
     ApiKeyState,
+    local_gguf_models::LocalGgufModelManager,
     mercury::{MERCURY_CREDENTIALS_URL, mercury_api_token},
     open_ai_compatible::{open_ai_compatible_api_token, open_ai_compatible_api_url},
 };
@@ -17,6 +18,8 @@ const OLLAMA_MODEL_PLACEHOLDER: &str = "qwen2.5-coder:3b-base";
 
 const OPEN_AI_COMPATIBLE_API_URL_PLACEHOLDER: &str = "http://localhost:8080/v1/completions";
 const OPEN_AI_COMPATIBLE_MODEL_PLACEHOLDER: &str = "qwen2.5-coder:3b-base";
+
+const LOCAL_GGUF_MODEL_PATH_PLACEHOLDER: &str = "/path/to/qwen2.5-coder-1.5b-q4_k_m.gguf";
 
 use crate::{
     SettingField, SettingItem, SettingsFieldMetadata, SettingsPageItem, SettingsWindow, USER,
@@ -83,6 +86,7 @@ pub(crate) fn render_edit_prediction_setup_page(
             .into_any_element(),
         ),
         Some(render_ollama_provider(settings_window, window, cx).into_any_element()),
+        Some(render_local_gguf_provider(settings_window, window, cx).into_any_element()),
         Some(
             render_api_key_provider(
                 IconName::AiOpenAiCompat,
@@ -533,6 +537,145 @@ fn ollama_settings() -> Box<[SettingsPageItem]> {
                         .prediction_debounce = value;
                 },
                 json_path: Some("edit_predictions.ollama.prediction_debounce"),
+            }),
+            metadata: None,
+            files: USER,
+        }),
+    ])
+}
+
+fn render_local_gguf_provider(
+    settings_window: &SettingsWindow,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) -> impl IntoElement {
+    let local_gguf_settings = local_gguf_settings();
+    let additional_fields = settings_window
+        .render_sub_page_items_section(local_gguf_settings.iter().enumerate(), true, window, cx)
+        .into_any_element();
+
+    // The download/import/status UI is a global entity so it can rerender itself
+    // as a download progresses. It is absent in contexts that never ran
+    // `edit_prediction::init` (for example isolated settings-window tests).
+    let model_manager = LocalGgufModelManager::try_global(cx).map(IntoElement::into_any_element);
+
+    v_flex()
+        .id("local-gguf")
+        .min_w_0()
+        .pt_8()
+        .gap_1p5()
+        .child(
+            SettingsSectionHeader::new("Local GGUF (On-device)")
+                .icon(IconName::AiOpenAiCompat)
+                .no_padding(true),
+        )
+        .child(
+            Label::new(
+                "Run edit predictions fully on-device with a local GGUF model. No account, API key or network connection is used.",
+            )
+            .size(LabelSize::Small)
+            .color(Color::Muted),
+        )
+        .when_some(model_manager, |this, model_manager| {
+            this.child(model_manager)
+        })
+        .child(div().px_neg_8().child(additional_fields))
+}
+
+fn local_gguf_settings() -> Box<[SettingsPageItem]> {
+    Box::new([
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "Model Path",
+            description: "Path to the GGUF model file to run locally. A leading `~` is expanded to your home folder.",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .local_gguf
+                        .as_ref()?
+                        .model_path
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .local_gguf
+                        .get_or_insert_default()
+                        .model_path = value;
+                },
+                json_path: Some("edit_predictions.local_gguf.model_path"),
+            }),
+            metadata: Some(Box::new(SettingsFieldMetadata {
+                placeholder: Some(LOCAL_GGUF_MODEL_PATH_PLACEHOLDER),
+                ..Default::default()
+            })),
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "Max Output Tokens",
+            description: "The maximum number of tokens to generate for each prediction.",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .local_gguf
+                        .as_ref()?
+                        .max_output_tokens
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .local_gguf
+                        .get_or_insert_default()
+                        .max_output_tokens = value;
+                },
+                json_path: Some("edit_predictions.local_gguf.max_output_tokens"),
+            }),
+            metadata: None,
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "Prediction Debounce",
+            description: "Delay in milliseconds before automatically requesting a prediction after typing stops. Set to 0 to request predictions immediately.",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .local_gguf
+                        .as_ref()?
+                        .prediction_debounce
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .local_gguf
+                        .get_or_insert_default()
+                        .prediction_debounce = value;
+                },
+                json_path: Some("edit_predictions.local_gguf.prediction_debounce"),
             }),
             metadata: None,
             files: USER,

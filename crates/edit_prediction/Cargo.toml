@@ -18,6 +18,7 @@ cli-support = []
 [dependencies]
 ai_onboarding.workspace = true
 anyhow.workspace = true
+async-fs.workspace = true
 heapless.workspace = true
 buffer_diff.workspace = true
 client.workspace = true
@@ -35,6 +36,7 @@ edit_prediction_context.workspace = true
 edit_prediction_metrics.workspace = true
 feature_flags.workspace = true
 fs.workspace = true
+fs2.workspace = true
 futures.workspace = true
 git.workspace = true
 gpui.workspace = true
@@ -48,6 +50,7 @@ menu.workspace = true
 ollama.workspace = true
 open_ai.workspace = true
 postage.workspace = true
+paths.workspace = true
 project.workspace = true
 pulldown-cmark.workspace = true
 rand.workspace = true
@@ -57,6 +60,7 @@ semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 settings.workspace = true
+sha2.workspace = true
 strum.workspace = true
 telemetry.workspace = true
 telemetry_events.workspace = true
@@ -72,6 +76,11 @@ zed_actions.workspace = true
 zed_credentials_provider.workspace = true
 zeta_prompt.workspace = true
 zstd.workspace = true
+
+# The on-device engine. `local_gguf` only compiles its native llama.cpp/Metal
+# backend on Apple silicon; every other target falls back to its stub, so this can
+# request the `metal` feature unconditionally.
+local_gguf = { workspace = true, features = ["metal"] }
 
 [dev-dependencies]
 criterion.workspace = true
@@ -90,6 +99,7 @@ parking_lot.workspace = true
 pretty_assertions.workspace = true
 project = { workspace = true, features = ["test-support"] }
 settings = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true
 workspace = { workspace = true, features = ["test-support"] }
 
 zlog.workspace = true

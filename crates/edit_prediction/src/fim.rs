@@ -1,14 +1,21 @@
 use crate::{
     EditPredictionId, EditPredictionInputs, EditPredictionModelInput, cursor_excerpt,
+    local_gguf_provider,
     open_ai_compatible::{self, load_open_ai_compatible_api_key_if_needed},
     prediction::EditPredictionResult,
 };
 use anyhow::{Context as _, Result, anyhow};
-use gpui::{App, AppContext as _, Entity, Task};
+use gpui::{App, AppContext as _, Entity, Task, http_client};
 use language::{
     Anchor, Buffer, BufferSnapshot, EditPredictionPromptFormat, ToOffset, ToPoint as _,
-    ZetaVersion, language_settings::all_language_settings,
+    ZetaVersion,
+    language_settings::{
+        LocalGgufEditPredictionSettings, OpenAiCompatibleEditPredictionSettings,
+        all_language_settings,
+    },
 };
+use local_gguf::CancellationToken;
+use settings::EditPredictionProvider;
 use std::{path::Path, sync::Arc, time::Instant};
 use zeta_prompt::{Zeta2PromptInput, compute_editable_and_context_ranges};
 
@@ -23,6 +30,109 @@ struct FimRequestOutput {
     buffer: Entity<Buffer>,
 }
 
+/// Where completion text comes from.
+///
+/// Remote providers keep using the OpenAI-compatible HTTP transport; the local
+/// provider dispatches to the in-process engine instead, so it never builds an
+/// HTTP client, loads an API key, or sends source code anywhere.
+pub(crate) enum CompletionTransport {
+    Remote {
+        provider: EditPredictionProvider,
+        settings: OpenAiCompatibleEditPredictionSettings,
+        api_key: Option<Arc<str>>,
+        http_client: Arc<dyn http_client::HttpClient>,
+    },
+    Local {
+        settings: LocalGgufEditPredictionSettings,
+    },
+    /// A test double for the on-device engine, installed as a GPUI global by
+    /// editor-wiring tests that must run without a model file or a GPU.
+    #[cfg(test)]
+    LocalTest {
+        completion: local_gguf_provider::TestLocalGgufCompletionFn,
+    },
+}
+
+impl CompletionTransport {
+    /// Sends the prompt, returning the completion text and a request id.
+    ///
+    /// `Ok(None)` means the request was cancelled before producing any text.
+    pub(crate) async fn send(
+        self,
+        prompt: String,
+        stop_tokens: Vec<String>,
+    ) -> Result<Option<(String, String)>> {
+        match self {
+            CompletionTransport::Remote {
+                provider,
+                settings,
+                api_key,
+                http_client,
+            } => {
+                let (text, request_id) = open_ai_compatible::send_custom_server_request(
+                    provider,
+                    &settings,
+                    prompt,
+                    settings.max_output_tokens,
+                    stop_tokens,
+                    api_key,
+                    &http_client,
+                )
+                .await?;
+                Ok(Some((text, request_id)))
+            }
+            CompletionTransport::Local { settings } => {
+                // Cancelling on drop aborts the generation if this request is
+                // superseded (its task is dropped) before it completes.
+                let cancellation = CancellationToken::new();
+                let _cancel_on_drop = CancelOnDrop(cancellation.clone());
+                local_gguf_provider::complete(&settings, prompt, stop_tokens, cancellation).await
+            }
+            #[cfg(test)]
+            CompletionTransport::LocalTest { completion } => {
+                let cancellation = CancellationToken::new();
+                let _cancel_on_drop = CancelOnDrop(cancellation.clone());
+                completion(prompt, stop_tokens, cancellation).await
+            }
+        }
+    }
+}
+
+/// Resolves the transport for the local provider.
+///
+/// In tests, a GPUI global can substitute a fake completion so the local prediction
+/// path is exercised without a model file or a GPU.
+#[cfg(test)]
+pub(crate) fn local_gguf_transport(
+    settings: LocalGgufEditPredictionSettings,
+    cx: &App,
+) -> CompletionTransport {
+    if let Some(test) = cx.try_global::<local_gguf_provider::TestLocalGgufCompletion>() {
+        return CompletionTransport::LocalTest {
+            completion: test.0.clone(),
+        };
+    }
+    CompletionTransport::Local { settings }
+}
+
+#[cfg(not(test))]
+pub(crate) fn local_gguf_transport(
+    settings: LocalGgufEditPredictionSettings,
+    _cx: &App,
+) -> CompletionTransport {
+    CompletionTransport::Local { settings }
+}
+
+/// Cancels an in-flight generation when the request that owns it is dropped,
+/// which is how a superseded or aborted prediction is interrupted.
+struct CancelOnDrop(CancellationToken);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
 pub fn request_prediction(
     EditPredictionModelInput {
         buffer,
@@ -35,8 +145,39 @@ pub fn request_prediction(
     prompt_format: EditPredictionPromptFormat,
     cx: &mut App,
 ) -> Task<Result<Option<EditPredictionResult>>> {
-    let settings = &all_language_settings(None, cx).edit_predictions;
-    let provider = settings.provider;
+    // `all_language_settings` borrows `cx`, so copy the pieces we need before
+    // taking a mutable borrow for the API key lookup below.
+    let (provider, remote_settings, local_gguf_settings) = {
+        let settings = &all_language_settings(None, cx).edit_predictions;
+        let remote_settings = match settings.provider {
+            EditPredictionProvider::Ollama => settings.ollama.clone(),
+            EditPredictionProvider::OpenAiCompatibleApi => settings.open_ai_compatible_api.clone(),
+            _ => None,
+        };
+        (
+            settings.provider,
+            remote_settings,
+            settings.local_gguf.clone(),
+        )
+    };
+
+    let transport = match provider {
+        EditPredictionProvider::Ollama | EditPredictionProvider::OpenAiCompatibleApi => {
+            let Some(remote_settings) = remote_settings else {
+                return Task::ready(Err(anyhow!("Unsupported edit prediction provider for FIM")));
+            };
+            CompletionTransport::Remote {
+                provider,
+                settings: remote_settings,
+                api_key: load_open_ai_compatible_api_key_if_needed(provider, cx),
+                http_client: cx.http_client(),
+            }
+        }
+        EditPredictionProvider::LocalGguf => local_gguf_transport(local_gguf_settings, cx),
+        _ => {
+            return Task::ready(Err(anyhow!("Unsupported edit prediction provider for FIM")));
+        }
+    };
 
     let full_path: Arc<Path> = snapshot
         .file()
@@ -44,21 +185,8 @@ pub fn request_prediction(
         .unwrap_or_else(|| "untitled".into())
         .into();
 
-    let http_client = cx.http_client();
     let cursor_point = position.to_point(&snapshot);
     let request_start = cx.background_executor().now();
-
-    let Some(settings) = (match provider {
-        settings::EditPredictionProvider::Ollama => settings.ollama.clone(),
-        settings::EditPredictionProvider::OpenAiCompatibleApi => {
-            settings.open_ai_compatible_api.clone()
-        }
-        _ => None,
-    }) else {
-        return Task::ready(Err(anyhow!("Unsupported edit prediction provider for FIM")));
-    };
-
-    let api_key = load_open_ai_compatible_api_key_if_needed(provider, cx);
 
     let result = cx.background_spawn(async move {
         let cursor_offset = cursor_point.to_offset(&snapshot);
@@ -103,18 +231,10 @@ pub fn request_prediction(
             .map(|token| token.to_string())
             .collect();
 
-        let max_tokens = settings.max_output_tokens;
-
-        let (response_text, request_id) = open_ai_compatible::send_custom_server_request(
-            provider,
-            &settings,
-            prompt,
-            max_tokens,
-            stop_tokens,
-            api_key,
-            &http_client,
-        )
-        .await?;
+        let Some((response_text, request_id)) = transport.send(prompt, stop_tokens).await? else {
+            // The request was cancelled; there is nothing to show.
+            return anyhow::Ok(None);
+        };
 
         let response_received_at = Instant::now();
 
@@ -127,7 +247,6 @@ pub fn request_prediction(
         let edits = if completion.is_empty() {
             vec![]
         } else {
-            let cursor_offset = cursor_point.to_offset(&snapshot);
             let anchor = snapshot.anchor_after(cursor_offset);
             vec![(anchor..anchor, completion)]
         };
@@ -137,18 +256,20 @@ pub fn request_prediction(
                 ..(excerpt_offset_range.start + editable_range.end),
         );
 
-        anyhow::Ok(FimRequestOutput {
+        anyhow::Ok(Some(FimRequestOutput {
             request_id,
             edits,
             editable_range,
             snapshot,
             inputs,
             buffer,
-        })
+        }))
     });
 
     cx.spawn(async move |cx: &mut gpui::AsyncApp| {
-        let output = result.await.context("fim edit prediction failed")?;
+        let Some(output) = result.await.context("fim edit prediction failed")? else {
+            return anyhow::Ok(None);
+        };
         anyhow::Ok(Some(
             EditPredictionResult::new(
                 EditPredictionId(output.request_id.into()),

@@ -9,9 +9,9 @@ use edit_prediction_types::{
 use feature_flags::FeatureFlagAppExt;
 use fs::Fs;
 use gpui::{App, Entity, prelude::*};
-use language::{Buffer, ToPoint as _};
+use language::{Buffer, ToPoint as _, language_settings::all_language_settings};
 use project::Project;
-use settings::{EditPredictionDataCollectionChoice, update_settings_file};
+use settings::{EditPredictionDataCollectionChoice, EditPredictionProvider, update_settings_file};
 
 use crate::{BufferEditPrediction, EditPredictionStore};
 
@@ -148,11 +148,14 @@ impl EditPredictionDelegate for ZedEditPredictionDelegate {
     ) {
         let store = self.store.read(cx);
 
-        if store.user_store.read_with(cx, |user_store, cx| {
-            user_store.account_too_young()
-                || user_store.has_overdue_invoices()
-                || crate::zed_edit_predictions_excluded_from_plan(user_store, cx)
-        }) {
+        if all_language_settings(None, cx).edit_predictions.provider
+            != EditPredictionProvider::LocalGguf
+            && store.user_store.read_with(cx, |user_store, cx| {
+                user_store.account_too_young()
+                    || user_store.has_overdue_invoices()
+                    || crate::zed_edit_predictions_excluded_from_plan(user_store, cx)
+            })
+        {
             return;
         }
 

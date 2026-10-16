@@ -1989,6 +1989,12 @@
     "mercury": {
       "prediction_debounce": 0,
     },
+    // Settings specific to the on-device Local GGUF provider.
+    "local_gguf": {
+      "model_path": null,
+      "max_output_tokens": 64,
+      "prediction_debounce": 250,
+    },
     // Controls whether Zed may collect training data when using Zed's Edit Predictions.
     // Data is only captured when the project is detected as open source.
     // Possible values:

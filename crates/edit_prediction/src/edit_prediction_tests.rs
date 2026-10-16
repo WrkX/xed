@@ -33,7 +33,7 @@ use gpui::{
 use indoc::indoc;
 use language::{
     Anchor, Buffer, Capability, Diagnostic, DiagnosticEntry, DiagnosticSet, DiagnosticSeverity,
-    Point, unified_diff_with_offsets,
+    EditPredictionPromptFormat, Point, unified_diff_with_offsets,
 };
 use lsp::LanguageServerId;
 use parking_lot::Mutex;
@@ -51,12 +51,14 @@ use uuid::Uuid;
 use workspace::{AppState, CollaboratorId, MultiWorkspace};
 use zeta_prompt::Zeta2PromptInput;
 
+use crate::local_gguf_provider::{TestLocalGgufCompletion, TestLocalGgufCompletionFuture};
 use crate::prediction::EditPredictionInputs;
 use crate::udiff::apply_diff_to_string;
 use crate::{
     BufferEditPrediction, EDIT_PREDICTION_SETTLED_QUIESCENCE, EditPredictionId,
     EditPredictionStore, REJECT_REQUEST_DEBOUNCE, REQUEST_TIMEOUT_BACKOFF,
 };
+use local_gguf::CancellationToken;
 
 use super::*;
 
@@ -5048,6 +5050,514 @@ async fn test_upsell_dismissed_via_dismissable_api(cx: &mut TestAppContext) {
     cx.update(|cx| assert!(!should_show_upsell_modal(cx)));
 
     kvp.delete_kvp(ZedPredictUpsell::KEY.into()).await.unwrap();
+}
+
+/// Points the Local GGUF provider at `model_path` (or leaves it unconfigured).
+fn set_local_gguf_provider(cx: &mut TestAppContext, model_path: Option<&str>) {
+    cx.update(|cx| {
+        SettingsStore::update_global(cx, |store, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.project.all_languages.edit_predictions =
+                    Some(settings::EditPredictionSettingsContent {
+                        provider: Some(EditPredictionProvider::LocalGguf),
+                        local_gguf: Some(settings::LocalGgufEditPredictionSettingsContent {
+                            model_path: model_path.map(str::to_string),
+                            max_output_tokens: Some(16),
+                            prediction_debounce: None,
+                        }),
+                        ..Default::default()
+                    });
+            });
+        });
+    });
+}
+
+/// Installs a fake on-device completion so the local FIM path can run without a
+/// model file or a GPU.
+fn install_local_gguf_completion(
+    cx: &mut TestAppContext,
+    completion: impl Fn(String, Vec<String>, CancellationToken) -> TestLocalGgufCompletionFuture
+    + Send
+    + Sync
+    + 'static,
+) {
+    cx.update(|cx| cx.set_global(TestLocalGgufCompletion(Arc::new(completion))));
+}
+
+/// Builds a store, project and buffer wired up for a `LocalGguf` FIM request.
+async fn make_local_gguf_test_store(
+    cx: &mut TestAppContext,
+) -> (
+    Entity<EditPredictionStore>,
+    Entity<Project>,
+    Entity<Buffer>,
+    RequestChannels,
+) {
+    let (ep_store, requests) = init_test_with_fake_client(cx);
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        "/root",
+        json!({
+            "foo.rs": "fn main() {\n    \n}\n"
+        }),
+    )
+    .await;
+    let project = Project::test(fs, vec![path!("/root").as_ref()], cx).await;
+    let buffer = project
+        .update(cx, |project, cx| {
+            let path = project.find_project_path(path!("root/foo.rs"), cx).unwrap();
+            project.open_buffer(path, cx)
+        })
+        .await
+        .unwrap();
+
+    ep_store.update(cx, |ep_store, _cx| {
+        ep_store.set_edit_prediction_model(EditPredictionModel::Fim {
+            format: EditPredictionPromptFormat::Qwen,
+        });
+    });
+
+    (ep_store, project, buffer, requests)
+}
+
+#[gpui::test]
+async fn test_local_gguf_delegate_ignores_cloud_account_restrictions(cx: &mut TestAppContext) {
+    use edit_prediction_types::EditPredictionDelegate as _;
+
+    let (ep_store, project, buffer, mut requests) = make_local_gguf_test_store(cx).await;
+    set_local_gguf_provider(cx, Some("/models/qwen.gguf"));
+    install_local_gguf_completion(cx, |_prompt, _stop_tokens, _cancellation| {
+        async move { Ok(Some(("return 1".into(), "local-account-test".into()))) }.boxed()
+    });
+
+    let (client, user_store) = ep_store.read_with(cx, |store, _cx| {
+        (store.client.clone(), store.user_store.clone())
+    });
+    let mut response = make_get_authenticated_user_response(1, "user".into());
+    response.plan.is_account_too_young = true;
+    response.plan.has_overdue_invoices = true;
+    let response = serde_json::to_string(&response).expect("failed to serialize user");
+    client
+        .http_client()
+        .as_fake()
+        .replace_handler(move |old_handler, request| {
+            let response = response.clone();
+            async move {
+                if request.uri().path() == "/client/users/me" {
+                    Ok(Response::builder().body(response.into())?)
+                } else {
+                    old_handler(request).await
+                }
+            }
+        });
+    client.override_authenticate(|_| {
+        Task::ready(Ok(Credentials {
+            user_id: 1,
+            access_token: "test".into(),
+        }))
+    });
+    client
+        .sign_in(false, &cx.to_async())
+        .await
+        .expect("failed to sign in");
+    cx.run_until_parked();
+    user_store.read_with(cx, |user_store, _cx| {
+        assert!(user_store.account_too_young());
+        assert!(user_store.has_overdue_invoices());
+    });
+
+    ep_store.update(cx, |store, cx| store.register_buffer(&buffer, &project, cx));
+    let delegate = cx.new(|cx| {
+        crate::ZedEditPredictionDelegate::new(
+            project.clone(),
+            Some(buffer.clone()),
+            &client,
+            &user_store,
+            cx,
+        )
+    });
+    let position = buffer.read_with(cx, |buffer, _cx| {
+        buffer.snapshot().anchor_before(Point::new(1, 0))
+    });
+    delegate.update(cx, |delegate, cx| {
+        delegate.refresh(
+            buffer.clone(),
+            position,
+            Duration::ZERO,
+            EditPredictionRequestTrigger::Other,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+
+    ep_store.update(cx, |store, cx| {
+        let prediction = store
+            .prediction_at(&buffer, None, &project, cx)
+            .expect("local predictions should ignore cloud account restrictions");
+        assert_eq!(prediction.id.0.as_ref(), "local-account-test");
+    });
+    assert_no_predict_request_ready(&mut requests.predict);
+}
+
+#[gpui::test]
+async fn test_local_gguf_fim_request_produces_edits(cx: &mut TestAppContext) {
+    let (ep_store, project, buffer, mut requests) = make_local_gguf_test_store(cx).await;
+    set_local_gguf_provider(cx, Some("~/models/qwen2.5-coder-1.5b.gguf"));
+
+    let prompts = Arc::new(Mutex::new(Vec::<String>::new()));
+    let stop_token_sets = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+    {
+        let prompts = prompts.clone();
+        let stop_token_sets = stop_token_sets.clone();
+        install_local_gguf_completion(cx, move |prompt, stop_tokens, _cancellation| {
+            prompts.lock().push(prompt);
+            stop_token_sets.lock().push(stop_tokens);
+            async move {
+                Ok(Some((
+                    "    let x = 1;\n".to_string(),
+                    "local-request-1".to_string(),
+                )))
+            }
+            .boxed()
+        });
+    }
+
+    let snapshot = buffer.read_with(cx, |buffer, _cx| buffer.snapshot());
+    let position = snapshot.anchor_before(language::Point::new(1, 0));
+
+    let prediction = ep_store
+        .update(cx, |ep_store, cx| {
+            ep_store.request_prediction(
+                &project,
+                &buffer,
+                position,
+                PredictEditsRequestTrigger::Other,
+                cx,
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap()
+        .prediction;
+
+    // The prompt uses the Qwen FIM format, and the local provider issues no HTTP
+    // request at all (the fake HTTP client would panic on an unexpected path).
+    let prompts = std::mem::take(&mut *prompts.lock());
+    assert_eq!(prompts.len(), 1);
+    assert!(prompts[0].starts_with("<|fim_prefix|>"), "{}", prompts[0]);
+    assert!(prompts[0].contains("<|fim_suffix|>"), "{}", prompts[0]);
+    assert!(prompts[0].contains("<|fim_middle|>"), "{}", prompts[0]);
+    assert_eq!(
+        std::mem::take(&mut *stop_token_sets.lock()),
+        vec![vec![
+            "<|endoftext|>".to_string(),
+            "<|fim_prefix|>".to_string(),
+            "<|fim_middle|>".to_string(),
+            "<|fim_suffix|>".to_string(),
+        ]]
+    );
+    assert_no_predict_request_ready(&mut requests.predict);
+
+    // The completion becomes an insertion at the cursor, applied to the snapshot
+    // captured when the request started.
+    assert_eq!(prediction.id.0.as_ref(), "local-request-1");
+    assert!(prediction.editable_range.is_some());
+    let cursor_offset = position.to_offset(&snapshot);
+    let edits = cx.update(|cx| from_completion_edits(&prediction.edits, &buffer, cx));
+    assert_eq!(
+        edits,
+        vec![(cursor_offset..cursor_offset, "    let x = 1;\n".into())]
+    );
+
+    buffer.update(cx, |buffer, cx| {
+        buffer.edit(prediction.edits.iter().cloned(), None, cx)
+    });
+    buffer.read_with(cx, |buffer, _cx| {
+        assert_eq!(buffer.text(), "fn main() {\n    let x = 1;\n    \n}\n");
+    });
+}
+
+#[gpui::test]
+async fn test_local_gguf_next_edit_models_rewrite_without_cloud_requests(cx: &mut TestAppContext) {
+    let (ep_store, project, buffer, mut requests) = make_local_gguf_test_store(cx).await;
+    let updated_text = "fn main() {\n    let value = 1;\n}\n";
+
+    for (file_name, model) in [
+        (
+            "sweep-next-edit-1.5b.q8_0.v2.gguf",
+            EditPredictionModel::SweepPrompt,
+        ),
+        ("zeta-2.1.Q4_K_M.gguf", EditPredictionModel::Zeta),
+    ] {
+        set_local_gguf_provider(cx, Some(file_name));
+        cx.update(|cx| {
+            SettingsStore::update_global(cx, |store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_mut()
+                        .expect("local provider settings should exist")
+                        .allow_data_collection = Some(EditPredictionDataCollectionChoice::Yes);
+                });
+            });
+        });
+        ep_store.update(cx, |store, cx| {
+            store.set_edit_prediction_model(model);
+            assert!(!store.is_data_collection_enabled(cx));
+        });
+        install_local_gguf_completion(cx, move |prompt, stop_tokens, _cancellation| {
+            let response = match model {
+                EditPredictionModel::SweepPrompt => {
+                    assert!(prompt.contains("<|file_sep|>current/"), "{prompt}");
+                    assert!(prompt.contains("<|file_sep|>updated/"), "{prompt}");
+                    assert_eq!(stop_tokens, ["<|file_sep|>", "</s>"]);
+                    updated_text.to_string()
+                }
+                _ => {
+                    assert!(prompt.starts_with("<[fim-suffix]>"), "{prompt}");
+                    assert!(prompt.contains("<|user_cursor|>"), "{prompt}");
+                    assert!(prompt.ends_with("<[fim-middle]>"), "{prompt}");
+                    assert_eq!(stop_tokens, ["<[end▁of▁sentence]>"]);
+                    format!("<|marker_1|>{updated_text}<|marker_2|>")
+                }
+            };
+            async move { Ok(Some((response, "local-next-edit".into()))) }.boxed()
+        });
+
+        let result = run_edit_prediction(&buffer, &project, &ep_store, Point::new(1, 4), cx)
+            .await
+            .expect("expected a local next-edit prediction");
+        let preview = buffer
+            .read_with(cx, |buffer, cx| {
+                buffer.preview_edits(result.prediction.edits.clone(), cx)
+            })
+            .await;
+        assert_eq!(preview.result_text_snapshot().text(), updated_text);
+        assert_no_predict_request_ready(&mut requests.predict);
+    }
+}
+
+#[gpui::test]
+async fn test_local_gguf_without_a_model_reports_an_error(cx: &mut TestAppContext) {
+    let (ep_store, project, buffer, mut requests) = make_local_gguf_test_store(cx).await;
+    set_local_gguf_provider(cx, None);
+
+    let snapshot = buffer.read_with(cx, |buffer, _cx| buffer.snapshot());
+    let position = snapshot.anchor_before(language::Point::new(1, 0));
+
+    let result = ep_store
+        .update(cx, |ep_store, cx| {
+            ep_store.request_prediction(
+                &project,
+                &buffer,
+                position,
+                PredictEditsRequestTrigger::Other,
+                cx,
+            )
+        })
+        .await;
+
+    assert!(
+        result.is_err(),
+        "an unconfigured local model should surface an error instead of panicking"
+    );
+    assert_no_predict_request_ready(&mut requests.predict);
+}
+
+#[gpui::test]
+async fn test_local_gguf_aborting_a_request_cancels_the_generation(cx: &mut TestAppContext) {
+    let (ep_store, project, buffer, _requests) = make_local_gguf_test_store(cx).await;
+
+    let tokens = Arc::new(Mutex::new(Vec::<CancellationToken>::new()));
+    {
+        let tokens = tokens.clone();
+        install_local_gguf_completion(cx, move |_prompt, _stop_tokens, cancellation| {
+            tokens.lock().push(cancellation);
+            async move {
+                // Never completes on its own: only dropping the request can end it.
+                futures::future::pending::<()>().await;
+                Ok(None::<(String, String)>)
+            }
+            .boxed()
+        });
+    }
+
+    let snapshot = buffer.read_with(cx, |buffer, _cx| buffer.snapshot());
+    let position = snapshot.anchor_before(language::Point::new(1, 0));
+
+    for (file_name, model) in [
+        (
+            "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
+            EditPredictionModel::Fim {
+                format: EditPredictionPromptFormat::Qwen,
+            },
+        ),
+        (
+            "sweep-next-edit-1.5b.q8_0.v2.gguf",
+            EditPredictionModel::SweepPrompt,
+        ),
+        ("zeta-2.1.Q4_K_M.gguf", EditPredictionModel::Zeta),
+    ] {
+        set_local_gguf_provider(cx, Some(file_name));
+        ep_store.update(cx, |store, _cx| store.set_edit_prediction_model(model));
+        let task = ep_store.update(cx, |ep_store, cx| {
+            ep_store.request_prediction(
+                &project,
+                &buffer,
+                position,
+                PredictEditsRequestTrigger::Other,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+
+        let token = tokens
+            .lock()
+            .last()
+            .cloned()
+            .expect("the local request should have started");
+        assert!(!token.is_cancelled());
+
+        // Dropping the request is what happens when it is superseded or the buffer is
+        // closed; it must abort the generation, not just hide its result.
+        drop(task);
+        cx.run_until_parked();
+
+        assert!(
+            token.is_cancelled(),
+            "aborting a request should cancel its in-flight generation"
+        );
+    }
+}
+
+#[gpui::test]
+async fn test_local_gguf_superseding_a_request_cancels_the_earlier_generation(
+    cx: &mut TestAppContext,
+) {
+    let (ep_store, project, buffer, _requests) = make_local_gguf_test_store(cx).await;
+    set_local_gguf_provider(cx, Some("~/models/qwen2.5-coder-1.5b.gguf"));
+
+    // The first generation blocks; later ones complete immediately.
+    let tokens = Arc::new(Mutex::new(Vec::<CancellationToken>::new()));
+    {
+        let tokens = tokens.clone();
+        install_local_gguf_completion(cx, move |_prompt, _stop_tokens, cancellation| {
+            let index = {
+                let mut tokens = tokens.lock();
+                tokens.push(cancellation);
+                tokens.len() - 1
+            };
+            async move {
+                if index == 0 {
+                    futures::future::pending::<()>().await;
+                }
+                Ok(Some(("0".to_string(), format!("local-{index}"))))
+            }
+            .boxed()
+        });
+    }
+
+    let snapshot = buffer.read_with(cx, |buffer, _cx| buffer.snapshot());
+    let position = snapshot.anchor_before(language::Point::new(1, 0));
+
+    ep_store.update(cx, |ep_store, cx| {
+        ep_store.refresh_prediction_from_buffer(
+            project.clone(),
+            buffer.clone(),
+            position,
+            Duration::ZERO,
+            EditPredictionRequestTrigger::Other,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        tokens.lock().len(),
+        1,
+        "the first local request should be in flight"
+    );
+
+    // A second refresh supersedes the first while it is still generating.
+    ep_store.update(cx, |ep_store, cx| {
+        ep_store.refresh_prediction_from_buffer(
+            project.clone(),
+            buffer.clone(),
+            position,
+            Duration::ZERO,
+            EditPredictionRequestTrigger::Other,
+            cx,
+        );
+    });
+    cx.background_executor
+        .advance_clock(EditPredictionStore::THROTTLE_TIMEOUT);
+    cx.run_until_parked();
+
+    let tokens = tokens.lock();
+    assert!(
+        tokens[0].is_cancelled(),
+        "the superseded generation should have been cancelled"
+    );
+    drop(tokens);
+
+    ep_store.update(cx, |ep_store, cx| {
+        let prediction = ep_store
+            .prediction_at(&buffer, None, &project, cx)
+            .expect("the newer prediction should be current");
+        assert_eq!(prediction.id.0.as_ref(), "local-1");
+    });
+}
+
+#[gpui::test]
+async fn test_local_gguf_provider_switch_drops_in_flight_generation(cx: &mut TestAppContext) {
+    let (ep_store, project, buffer, _requests) = make_local_gguf_test_store(cx).await;
+    set_local_gguf_provider(cx, Some("~/models/qwen2.5-coder-1.5b.gguf"));
+
+    let tokens = Arc::new(Mutex::new(Vec::<CancellationToken>::new()));
+    {
+        let tokens = tokens.clone();
+        install_local_gguf_completion(cx, move |_prompt, _stop_tokens, cancellation| {
+            tokens.lock().push(cancellation);
+            async move {
+                futures::future::pending::<()>().await;
+                Ok(None::<(String, String)>)
+            }
+            .boxed()
+        });
+    }
+
+    let snapshot = buffer.read_with(cx, |buffer, _cx| buffer.snapshot());
+    let position = snapshot.anchor_before(language::Point::new(1, 0));
+
+    ep_store.update(cx, |ep_store, cx| {
+        ep_store.refresh_prediction_from_buffer(
+            project.clone(),
+            buffer.clone(),
+            position,
+            Duration::ZERO,
+            EditPredictionRequestTrigger::Other,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+
+    let token = tokens
+        .lock()
+        .first()
+        .cloned()
+        .expect("the local request should be in flight");
+    assert!(!token.is_cancelled());
+
+    // Switching providers is what makes the registry call this; it drops the
+    // pending request, which cancels the generation at the transport.
+    ep_store.update(cx, |ep_store, _cx| ep_store.cancel_pending_predictions());
+    cx.run_until_parked();
+
+    assert!(
+        token.is_cancelled(),
+        "a provider switch should abort the in-flight generation"
+    );
 }
 
 #[ctor::ctor(unsafe)]

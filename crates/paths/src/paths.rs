@@ -465,6 +465,15 @@ pub fn copilot_dir() -> &'static PathBuf {
     COPILOT_DIR.get_or_init(|| data_dir().join("copilot"))
 }
 
+/// Returns the path to the directory where downloaded model files are stored.
+///
+/// This is app-managed storage for large downloaded artifacts (for example the
+/// on-device edit prediction GGUF model).
+pub fn models_dir() -> &'static PathBuf {
+    static MODELS_DIR: OnceLock<PathBuf> = OnceLock::new();
+    MODELS_DIR.get_or_init(|| data_dir().join("models"))
+}
+
 /// Returns the path to the default Prettier directory.
 pub fn default_prettier_dir() -> &'static PathBuf {
     static DEFAULT_PRETTIER_DIR: OnceLock<PathBuf> = OnceLock::new();

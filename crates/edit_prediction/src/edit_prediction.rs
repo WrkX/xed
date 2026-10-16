@@ -81,6 +81,8 @@ pub mod data_collection;
 pub mod example_spec;
 pub mod fim;
 mod license_detection;
+pub mod local_gguf_models;
+mod local_gguf_provider;
 pub mod mercury;
 pub mod metrics;
 pub mod ollama;
@@ -1088,6 +1090,18 @@ impl EditPredictionStore {
         self.edit_prediction_model = model;
     }
 
+    /// Cancels any in-flight predictions for every project.
+    ///
+    /// The provider registry calls this when the active provider changes, so a
+    /// generation started by the previous provider does not keep running in the
+    /// background. Dropping the pending task cancels the underlying request, and
+    /// the local transport cancels its in-flight generation when that happens.
+    pub fn cancel_pending_predictions(&mut self) {
+        for project_state in self.projects.values_mut() {
+            project_state.pending_predictions.clear();
+        }
+    }
+
     pub fn set_zeta2_raw_config(&mut self, config: Zeta2RawConfig) {
         self.zeta2_raw_config = Some(config);
     }
@@ -1211,6 +1225,9 @@ impl EditPredictionStore {
                 match settings.provider {
                     EditPredictionProvider::Ollama => {
                         edit_prediction_types::EditPredictionIconSet::new(IconName::AiOllama)
+                    }
+                    EditPredictionProvider::LocalGguf => {
+                        edit_prediction_types::EditPredictionIconSet::new(IconName::AiOpenAiCompat)
                     }
                     _ => {
                         edit_prediction_types::EditPredictionIconSet::new(IconName::AiOpenAiCompat)
@@ -1890,7 +1907,9 @@ impl EditPredictionStore {
             EditPredictionModel::Zeta => {
                 let is_cloud = !matches!(
                     all_language_settings(None, cx).edit_predictions.provider,
-                    EditPredictionProvider::Ollama | EditPredictionProvider::OpenAiCompatibleApi
+                    EditPredictionProvider::Ollama
+                        | EditPredictionProvider::OpenAiCompatibleApi
+                        | EditPredictionProvider::LocalGguf
                 );
                 if is_cloud {
                     zeta::edit_prediction_accepted(self, current_prediction, cx)
@@ -2284,7 +2303,9 @@ impl EditPredictionStore {
             EditPredictionModel::Zeta => {
                 let is_cloud = !matches!(
                     all_language_settings(None, cx).edit_predictions.provider,
-                    EditPredictionProvider::Ollama | EditPredictionProvider::OpenAiCompatibleApi
+                    EditPredictionProvider::Ollama
+                        | EditPredictionProvider::OpenAiCompatibleApi
+                        | EditPredictionProvider::LocalGguf
                 );
 
                 if is_cloud {
@@ -2531,7 +2552,8 @@ fn is_ep_store_provider(provider: EditPredictionProvider) -> bool {
         EditPredictionProvider::Zed
         | EditPredictionProvider::Mercury
         | EditPredictionProvider::Ollama
-        | EditPredictionProvider::OpenAiCompatibleApi => true,
+        | EditPredictionProvider::OpenAiCompatibleApi
+        | EditPredictionProvider::LocalGguf => true,
         EditPredictionProvider::None
         | EditPredictionProvider::Copilot
         | EditPredictionProvider::Codestral => false,
@@ -2556,6 +2578,7 @@ impl EditPredictionStore {
                 EditPredictionProvider::Zed | EditPredictionProvider::Mercury => (true, 2),
                 EditPredictionProvider::Ollama => (false, 1),
                 EditPredictionProvider::OpenAiCompatibleApi => (false, 2),
+                EditPredictionProvider::LocalGguf => (false, 1),
                 EditPredictionProvider::None
                 | EditPredictionProvider::Copilot
                 | EditPredictionProvider::Codestral => {
@@ -2790,7 +2813,9 @@ impl EditPredictionStore {
         let is_cloud_zeta = matches!(self.edit_prediction_model, EditPredictionModel::Zeta)
             && !matches!(
                 all_language_settings(None, cx).edit_predictions.provider,
-                EditPredictionProvider::Ollama | EditPredictionProvider::OpenAiCompatibleApi
+                EditPredictionProvider::Ollama
+                    | EditPredictionProvider::OpenAiCompatibleApi
+                    | EditPredictionProvider::LocalGguf
             );
         if is_cloud_zeta && !self.client.cloud_client().has_credentials() {
             return Task::ready(Ok(None));
@@ -3283,6 +3308,12 @@ impl EditPredictionStore {
     }
 
     pub(crate) fn is_data_collection_enabled(&self, cx: &App) -> bool {
+        if all_language_settings(None, cx).edit_predictions.provider
+            == EditPredictionProvider::LocalGguf
+        {
+            return false;
+        }
+
         if !self.is_data_collection_allowed_by_organization(cx) {
             return false;
         }
@@ -3637,6 +3668,17 @@ fn show_free_plan_edit_predictions_ended_notice_once(user_store: &Entity<UserSto
 }
 
 pub fn init(cx: &mut App) {
+    // Join before returning the quit future: GPUI's bounded async shutdown may
+    // expire before a decode finishes, leaving Metal resources alive at exit.
+    cx.on_app_quit(|_cx| {
+        local_gguf_provider::shutdown();
+        async {}
+    })
+    .detach();
+
+    // Model download/import state for the Local GGUF settings section.
+    local_gguf_models::LocalGgufModelManager::init_global(cx);
+
     cx.observe_new(move |workspace: &mut Workspace, _, _cx| {
         workspace.register_action(
             move |workspace, _: &zed_actions::OpenZedPredictOnboarding, window, cx| {
@@ -3673,6 +3715,15 @@ pub fn init(cx: &mut App) {
         });
     })
     .detach();
+}
+
+/// Releases the on-device model, freeing its memory.
+///
+/// Called when the provider is switched away from `local_gguf` or disabled so
+/// the model is not kept resident. A no-op when nothing is loaded, and the next
+/// local request reloads from disk if needed.
+pub fn unload_local_gguf_model() {
+    local_gguf_provider::unload();
 }
 
 fn is_zed_industries_repo(url: &str) -> bool {
