@@ -7337,17 +7337,23 @@ impl ThreadView {
         (before, after)
     }
 
-    fn latest_user_message_index(&self, cx: &App) -> Option<usize> {
-        self.thread.read(cx).entries().iter().rposition(
+    /// The user message that owns the region currently at the top of the
+    /// viewport: the most recent non-indented user message at or above the
+    /// topmost visible entry. This lets the pinned prompt track the transcript
+    /// as the user scrolls instead of always pointing at the latest prompt.
+    fn active_user_message_index(&self, cx: &App) -> Option<usize> {
+        let entries = self.thread.read(cx).entries();
+        let top_ix = self.list_state.logical_scroll_top().item_ix;
+        entries.iter().take(top_ix + 1).rposition(
             |entry| matches!(entry, AgentThreadEntry::UserMessage(message) if !message.indented),
         )
     }
 
     fn render_pinned_prompt(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let index = self.latest_user_message_index(cx)?;
-        let outside = self.list_state.item_is_above_viewport(index) == Some(true)
-            || self.list_state.item_is_below_viewport(index) == Some(true);
-        if !outside {
+        let index = self.active_user_message_index(cx)?;
+        // The active message is always at or above the topmost visible entry,
+        // so it only needs a pinned prompt once it has scrolled off the top.
+        if self.list_state.item_is_above_viewport(index) != Some(true) {
             return None;
         }
         let AgentThreadEntry::UserMessage(message) = self.thread.read(cx).entries().get(index)?
@@ -7376,7 +7382,7 @@ impl ThreadView {
                         .border_1()
                         .border_color(cx.theme().colors().border_variant.opacity(0.7))
                         .hover(|this| this.border_color(cx.theme().colors().border))
-                        .tooltip(Tooltip::text("Jump to your latest message"))
+                        .tooltip(Tooltip::text("Jump to this message"))
                         .child(Label::new(preview).size(LabelSize::Small).truncate())
                         .child(
                             h_flex()
@@ -7395,15 +7401,15 @@ impl ThreadView {
                                 ),
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.jump_to_latest_prompt(window, cx);
+                            this.jump_to_active_prompt(window, cx);
                         })),
                 )
                 .into_any_element(),
         )
     }
 
-    fn jump_to_latest_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(index) = self.latest_user_message_index(cx) {
+    fn jump_to_active_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(index) = self.active_user_message_index(cx) {
             self.prompt_jump_padding = true;
             self.scroll_to_user_message_index(Some(index), cx);
             self.focus_handle.focus(window, cx);

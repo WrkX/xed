@@ -7940,6 +7940,78 @@ pub(crate) mod tests {
     }
 
     #[gpui::test]
+    async fn test_pinned_prompt_tracks_scroll_position(cx: &mut TestAppContext) {
+        init_test(cx);
+        let connection = StubAgentConnection::new();
+        // Long responses make the transcript scrollable so each prompt can be
+        // brought to the top of the viewport independently.
+        let response = "Answer paragraph.\n\n".repeat(80);
+        connection.set_next_prompt_updates(vec![acp_v1::SessionUpdate::AgentMessageChunk(
+            acp_v1::ContentChunk::new(response.clone().into()),
+        )]);
+        let (conversation_view, cx) =
+            setup_full_size_conversation_and_send(connection.clone(), "Prompt 1", cx).await;
+
+        let thread =
+            active_thread(&conversation_view, cx).read_with(cx, |view, _| view.thread.clone());
+        for prompt in ["Prompt 2", "Prompt 3"] {
+            connection.set_next_prompt_updates(vec![acp_v1::SessionUpdate::AgentMessageChunk(
+                acp_v1::ContentChunk::new(response.clone().into()),
+            )]);
+            thread
+                .update(cx, |thread, cx| thread.send_raw(prompt, cx))
+                .await
+                .expect("prompt should succeed");
+            cx.run_until_parked();
+        }
+
+        // Entries layout is: [Prompt 1, Answer 1, Prompt 2, Answer 2, Prompt 3, Answer 3].
+        let thread_view = active_thread(&conversation_view, cx);
+        let scroll_to = |thread_view: &Entity<ThreadView>,
+                         item_ix: usize,
+                         cx: &mut VisualTestContext| {
+            thread_view.update_in(cx, |view, window, cx| {
+                view.focus_handle.focus(window, cx);
+                view.list_state.scroll_to(ListOffset {
+                    item_ix,
+                    offset_in_item: px(0.),
+                });
+                cx.notify();
+            });
+            cx.run_until_parked();
+            cx.refresh().expect("draw transcript");
+        };
+
+        // With an answer at the top of the viewport, the preceding prompt is
+        // pinned, and clicking it jumps to that prompt rather than the latest one.
+        for (top_ix, prompt_ix) in [(1usize, 0usize), (3, 2), (5, 4)] {
+            scroll_to(&thread_view, top_ix, cx);
+            let pinned = cx.debug_bounds("pinned-latest-prompt").unwrap_or_else(|| {
+                panic!("expected a pinned prompt once item {top_ix} owns the viewport")
+            });
+            cx.simulate_click(pinned.center(), gpui::Modifiers::default());
+            cx.run_until_parked();
+            thread_view.read_with(cx, |view, _| {
+                assert_eq!(
+                    view.list_state.logical_scroll_top().item_ix,
+                    prompt_ix,
+                    "clicking the pinned prompt should jump to the prompt owning the viewport"
+                );
+            });
+        }
+
+        // When the prompt itself sits at the top of the viewport it is visible,
+        // so nothing is pinned over it.
+        for top_ix in [0usize, 2, 4] {
+            scroll_to(&thread_view, top_ix, cx);
+            assert!(
+                cx.debug_bounds("pinned-latest-prompt").is_none(),
+                "no pinned prompt expected while the prompt at item {top_ix} is visible"
+            );
+        }
+    }
+
+    #[gpui::test]
     async fn test_plan_completion_does_not_add_transcript_entries(cx: &mut TestAppContext) {
         init_test(cx);
 
