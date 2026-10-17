@@ -8,16 +8,17 @@ use crate::{
 use anyhow::{Context as _, Result};
 use buffer_diff::DiffHunkSecondaryStatus;
 use editor::{
-    DefaultDiffHunkRenderer, Editor, EditorEvent, SelectionEffects, SplittableEditor,
-    actions::{GoToHunk, GoToPreviousHunk, SelectAll, SendReviewToAgent},
+    ClipboardSelection, DefaultDiffHunkRenderer, Editor, EditorEvent, SelectionEffects,
+    SplittableEditor,
+    actions::{Copy, GoToHunk, GoToPreviousHunk, SelectAll, SendReviewToAgent},
 };
 use git::{Commit, StageAll, StageAndNext, ToggleStaged, UnstageAll, UnstageAndNext};
 use gpui::{
-    Action, App, AppContext as _, Entity, EventEmitter, FocusHandle, Focusable, Render,
-    Subscription, Task, WeakEntity, actions,
+    Action, App, AppContext as _, ClipboardItem, Entity, EventEmitter, FocusHandle, Focusable,
+    Render, Subscription, Task, WeakEntity, actions,
 };
 use language::{Anchor, Capability};
-use multi_buffer::MultiBuffer;
+use multi_buffer::{AnchorRangeExt, MultiBuffer};
 use project::{
     Project, ProjectPath,
     git_store::{
@@ -336,12 +337,7 @@ impl ProjectDiff {
         self.diff.read(cx).editor().clone()
     }
 
-    fn select_all_in_current_file(
-        &mut self,
-        _: &SelectAll,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    fn focused_editor(&self, window: &Window, cx: &App) -> Option<Entity<Editor>> {
         let splittable_editor = self.diff.read(cx).editor().clone();
         let lhs_editor = splittable_editor.read(cx).lhs_editor().cloned();
         let editor = lhs_editor
@@ -353,9 +349,20 @@ impl ProjectDiff {
             })
             .unwrap_or_else(|| splittable_editor.read(cx).rhs_editor().clone());
         let editor_focus_handle = editor.read(cx).focus_handle(cx);
-        if !editor_focus_handle.contains_focused(window, cx) {
+        editor_focus_handle
+            .contains_focused(window, cx)
+            .then_some(editor)
+    }
+
+    fn select_all_in_current_file(
+        &mut self,
+        _: &SelectAll,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(editor) = self.focused_editor(window, cx) else {
             return false;
-        }
+        };
 
         let (multibuffer, editor_anchor) = editor.read_with(cx, |editor, _| {
             (
@@ -381,6 +388,60 @@ impl ProjectDiff {
                 selections.select_ranges([range]);
             });
         });
+        true
+    }
+
+    fn copy_current_file(&self, window: &Window, cx: &mut Context<Self>) -> bool {
+        let Some(editor) = self.focused_editor(window, cx) else {
+            return false;
+        };
+        let editor = editor.read(cx);
+        let mut selections = editor.selections.disjoint_anchor_ranges();
+        let Some(selection) = selections.next() else {
+            return false;
+        };
+        if editor.has_pending_selection() || selections.next().is_some() {
+            return false;
+        }
+
+        let snapshot = editor.buffer().read(cx).snapshot(cx);
+        let Some((buffer_anchor, buffer)) = snapshot.anchor_to_buffer_anchor(selection.start)
+        else {
+            return false;
+        };
+        let buffer_id = buffer_anchor.buffer_id;
+        let Some((start, end)) = snapshot
+            .anchor_in_buffer(Anchor::min_for_buffer(buffer_id))
+            .zip(snapshot.anchor_in_buffer(Anchor::max_for_buffer(buffer_id)))
+        else {
+            return false;
+        };
+        if selection.to_offset(&snapshot) != (start..end).to_offset(&snapshot) {
+            return false;
+        }
+
+        // A file selection spans diff excerpts, which can include deleted text and omit context.
+        let text = buffer.text();
+        let file_path = buffer.file().and_then(|file| {
+            self.project.read(cx).absolute_path(
+                &ProjectPath {
+                    worktree_id: file.worktree_id(cx),
+                    path: file.path().clone(),
+                },
+                cx,
+            )
+        });
+        let metadata = ClipboardSelection {
+            len: text.len(),
+            is_entire_line: editor.selections.line_mode(),
+            first_line_indent: buffer.indent_size_for_line(0).len,
+            line_range: file_path.as_ref().map(|_| 0..=buffer.max_point().row),
+            file_path,
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string_with_json_metadata(
+            text,
+            vec![metadata],
+        ));
         true
     }
 
@@ -638,6 +699,11 @@ impl Render for ProjectDiff {
             // The editor handles SelectAll during bubbling, so Project Diff must intercept it first.
             .capture_action(cx.listener(|this, action: &SelectAll, window, cx| {
                 if this.select_all_in_current_file(action, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &Copy, window, cx| {
+                if this.copy_current_file(window, cx) {
                     cx.stop_propagation();
                 }
             }))
@@ -1348,7 +1414,7 @@ mod tests {
             .map(|line| format!("context {line}\n"))
             .collect::<String>();
         let previous_main = format!("old first\n{unchanged_lines}old last\n");
-        let current_main = format!("new first\n{unchanged_lines}new last\n");
+        let current_main = format!("new first\n{unchanged_lines}new last");
         let fs = FakeFs::new(cx.executor());
         fs.insert_tree(
             path!("/project"),
@@ -1407,9 +1473,58 @@ mod tests {
             "main.rs should have separate hunks"
         );
 
-        editor_context.dispatch_action(editor::actions::CollapseAllDiffHunks);
-        editor_context.dispatch_action(SelectAll);
-        assert_selection_covers_buffer(&mut editor_context, main_buffer_id);
+        for expand in [true, false] {
+            if expand {
+                editor_context.dispatch_action(editor::actions::ExpandAllDiffHunks);
+                editor_context.update_editor(|editor, window, cx| {
+                    editor.change_selections(Default::default(), window, cx, |selections| {
+                        selections.select_ranges([
+                            language::Point::new(0, 0)..language::Point::new(0, 3)
+                        ]);
+                    });
+                });
+                editor_context.dispatch_action(Copy);
+                assert_eq!(
+                    editor_context
+                        .cx
+                        .read_from_clipboard()
+                        .and_then(|item| item.text()),
+                    Some("old".to_owned()),
+                    "Deleted text should remain copyable when selected explicitly"
+                );
+            } else {
+                editor_context.dispatch_action(editor::actions::CollapseAllDiffHunks);
+            }
+            editor_context.dispatch_action(SelectAll);
+            assert_selection_covers_buffer(&mut editor_context, main_buffer_id);
+            editor_context.dispatch_action(Copy);
+            assert_eq!(
+                editor_context
+                    .cx
+                    .read_from_clipboard()
+                    .and_then(|item| item.text()),
+                Some(current_main.clone()),
+                "Copy after Select All should contain the entire current file"
+            );
+        }
+        let clipboard_metadata: Vec<ClipboardSelection> = editor_context
+            .cx
+            .read_from_clipboard()
+            .and_then(|item| item.entries().first().cloned())
+            .and_then(|entry| match entry {
+                gpui::ClipboardEntry::String(text) => text.metadata_json(),
+                _ => None,
+            })
+            .expect("copied file should retain selection metadata");
+        assert_eq!(clipboard_metadata.len(), 1);
+        let metadata = clipboard_metadata.first().expect("file selection metadata");
+        assert_eq!(metadata.len, current_main.len());
+        assert_eq!(metadata.line_range, Some(0..=13));
+        assert_eq!(
+            metadata.file_path.as_deref(),
+            Some(Path::new(path!("/project/a_main.rs")))
+        );
+
         editor_context.dispatch_action(SelectAll);
         assert_selection_covers_buffer(&mut editor_context, main_buffer_id);
 
@@ -1448,10 +1563,21 @@ mod tests {
         });
         editor_context.dispatch_action(SelectAll);
         assert_selection_covers_buffer(&mut editor_context, active_buffer_id);
+        editor_context.dispatch_action(Copy);
+        assert_eq!(
+            editor_context
+                .cx
+                .read_from_clipboard()
+                .and_then(|item| item.text()),
+            Some("utility new\n".to_owned())
+        );
 
         let updated_main = format!("new first updated\n{unchanged_lines}new last updated\n");
-        fs.insert_file(path!("/project/a_main.rs"), updated_main.into_bytes())
-            .await;
+        fs.insert_file(
+            path!("/project/a_main.rs"),
+            updated_main.clone().into_bytes(),
+        )
+        .await;
         editor_context.cx.run_until_parked();
 
         let updated_buffer_id = editor_context.update_editor(|editor, window, cx| {
@@ -1478,6 +1604,14 @@ mod tests {
         });
         editor_context.dispatch_action(SelectAll);
         assert_selection_covers_buffer(&mut editor_context, updated_buffer_id);
+        editor_context.dispatch_action(Copy);
+        assert_eq!(
+            editor_context
+                .cx
+                .read_from_clipboard()
+                .and_then(|item| item.text()),
+            Some(updated_main)
+        );
 
         editor_context.cx.update(|_, cx| {
             cx.update_global::<SettingsStore, _>(|store, cx| {
@@ -1511,6 +1645,15 @@ mod tests {
         });
         lhs_context.dispatch_action(SelectAll);
         assert_selection_covers_buffer(&mut lhs_context, lhs_buffer_id);
+        lhs_context.dispatch_action(Copy);
+        assert_eq!(
+            lhs_context
+                .cx
+                .read_from_clipboard()
+                .and_then(|item| item.text()),
+            Some(format!("old first\n{unchanged_lines}old last\n")),
+            "Copy on the left side of a split diff should use that side's file"
+        );
     }
 
     #[gpui::test]

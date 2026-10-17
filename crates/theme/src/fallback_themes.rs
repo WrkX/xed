@@ -115,6 +115,8 @@ pub(crate) fn zed_default_dark() -> Theme {
                 blue, orange, purple, teal, red, green, yellow,
             ])),
             colors: ThemeColors {
+                agent_command_foreground: None,
+                agent_input_focused_border: None,
                 border: hsla(225. / 360., 13. / 100., 12. / 100., 1.),
                 border_variant: hsla(228. / 360., 8. / 100., 25. / 100., 1.),
                 border_focused: hsla(223. / 360., 78. / 100., 65. / 100., 1.),

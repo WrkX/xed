@@ -6,6 +6,7 @@ description: Browse, install, and create themes for Zed. Includes built-in theme
 # Themes
 
 Zed comes with a number of built-in themes, with more themes available as extensions.
+Cursor is a built-in dark theme based on the Cursor Dark palette, with gray comments and agent shell commands.
 
 ## Selecting a Theme
 
@@ -110,6 +111,14 @@ To see a comprehensive list of captures (like `comment` and `comment.doc`) see [
 
 To see a list of available theme attributes look at the JSON file for your theme.
 For example, [assets/themes/one/one.json](https://github.com/zed-industries/zed/blob/main/assets/themes/one/one.json) for the default One Dark and One Light themes.
+
+The `agent.command.foreground` attribute sets the color of shell commands in Agent Panel tool cards, including command previews and executed command headers.
+It does not change command output, messages, slash commands, or editor syntax.
+When unset, commands retain their normal syntax highlighting.
+
+The optional `agent.input.focused_border` attribute sets the border color and outer
+glow of the Agent Panel input while it has focus. When unset, the input retains its
+default appearance.
 
 ## Local Themes {#local-themes}
 

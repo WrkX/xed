@@ -247,6 +247,7 @@ impl DbThread {
                     last_user_message_id = Some(id.clone());
 
                     crate::Message::User(UserMessage {
+                        created_at: None,
                         // MessageId from old format can't be meaningfully converted, so generate a new one
                         id,
                         content: Arc::from(content),
@@ -319,6 +320,7 @@ impl DbThread {
                     }
 
                     crate::Message::Agent(AgentMessage {
+                        created_at: None,
                         content,
                         tool_results,
                         reasoning_details: None,

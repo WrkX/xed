@@ -16,6 +16,7 @@ use action_log::{ActionLog, ActionLogTelemetry};
 use agent_client_protocol::schema::{MaybeUndefined, v1 as acp_v1, v2 as acp_v2};
 use agent_settings::AgentSettings;
 use anyhow::{Context as _, Result, anyhow};
+use chrono::{DateTime, Utc};
 use collections::{HashSet, IndexMap};
 pub use connection::*;
 pub use diff::*;
@@ -308,6 +309,7 @@ pub fn subagent_session_info_from_meta(meta: &Option<acp_v1::Meta>) -> Option<Su
 
 #[derive(Debug)]
 pub struct UserMessage {
+    pub created_at: Option<DateTime<Utc>>,
     pub identity: MessageIdentity,
     pub meta: Option<acp_v2::Meta>,
     pub client_id: Option<ClientUserMessageId>,
@@ -379,11 +381,13 @@ impl AssistantMessage {
 #[derive(Debug, PartialEq)]
 pub enum AssistantMessageChunk {
     Message {
+        created_at: Option<DateTime<Utc>>,
         identity: MessageIdentity,
         meta: Option<acp_v2::Meta>,
         block: MessageContent,
     },
     Thought {
+        created_at: Option<DateTime<Utc>>,
         identity: MessageIdentity,
         meta: Option<acp_v2::Meta>,
         block: MessageContent,
@@ -398,6 +402,7 @@ impl AssistantMessageChunk {
         cx: &mut App,
     ) -> Self {
         Self::Message {
+            created_at: None,
             identity: MessageIdentity::Legacy(None),
             meta: None,
             block: MessageContent::new(chunk.into(), language_registry, path_style, cx),
@@ -3420,6 +3425,7 @@ pub struct AcpThread {
     parent_session_id: Option<acp_v2::SessionId>,
     provisional_title: Option<SharedString>,
     entries: Vec<AgentThreadEntry>,
+    capture_message_timestamps: bool,
     // Notices stay with the live session, but never enter conversation history or exports.
     notices: Vec<(usize, acp_v2::Notice)>,
     next_notice_id: usize,
@@ -3759,6 +3765,7 @@ impl AcpThread {
             update_last_checkpoint_if_changed_task: None,
             shared_buffers: Default::default(),
             entries: Default::default(),
+            capture_message_timestamps: true,
             notices: Vec::new(),
             next_notice_id: 0,
             elicitations: ElicitationStore::default(),
@@ -3795,6 +3802,14 @@ impl AcpThread {
 
     pub fn parent_session_id(&self) -> Option<&acp_v2::SessionId> {
         self.parent_session_id.as_ref()
+    }
+
+    pub fn set_capture_message_timestamps(&mut self, capture: bool) {
+        self.capture_message_timestamps = capture;
+    }
+
+    fn captured_message_timestamp(&self) -> Option<DateTime<Utc>> {
+        self.capture_message_timestamps.then(Utc::now)
     }
 
     pub fn prompt_capabilities(&self) -> &acp_v2::PromptCapabilities {
@@ -4632,10 +4647,12 @@ impl AcpThread {
 
         self.flush_streaming_text(cx);
         let entry_index = self.entries.len();
+        let created_at = self.captured_message_timestamp();
         match kind {
             MessageKind::User => {
                 self.entries
                     .push(AgentThreadEntry::UserMessage(UserMessage {
+                        created_at,
                         identity,
                         meta: None,
                         client_id: None,
@@ -4649,12 +4666,14 @@ impl AcpThread {
             MessageKind::Assistant | MessageKind::Thought => {
                 let chunk = if kind == MessageKind::Thought {
                     AssistantMessageChunk::Thought {
+                        created_at,
                         identity,
                         meta: None,
                         block: MessageContent::default(),
                     }
                 } else {
                     AssistantMessageChunk::Message {
+                        created_at,
                         identity,
                         meta: None,
                         block: MessageContent::default(),
@@ -4733,6 +4752,24 @@ impl AcpThread {
         )
     }
 
+    pub fn push_user_content_block_with_timestamp(
+        &mut self,
+        client_id: Option<ClientUserMessageId>,
+        chunk: acp_v2::ContentBlock,
+        created_at: Option<DateTime<Utc>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.push_user_content_block_with_protocol_id_and_timestamp(
+            client_id.clone(),
+            client_id.is_some(),
+            None,
+            chunk,
+            false,
+            created_at,
+            cx,
+        )
+    }
+
     fn push_user_content_block_from_agent(
         &mut self,
         id: Option<acp_v1::MessageId>,
@@ -4749,6 +4786,27 @@ impl AcpThread {
         protocol_id: Option<acp_v1::MessageId>,
         chunk: acp_v2::ContentBlock,
         indented: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.push_user_content_block_with_protocol_id_and_timestamp(
+            incoming_client_id,
+            is_optimistic,
+            protocol_id,
+            chunk,
+            indented,
+            self.captured_message_timestamp(),
+            cx,
+        )
+    }
+
+    fn push_user_content_block_with_protocol_id_and_timestamp(
+        &mut self,
+        incoming_client_id: Option<ClientUserMessageId>,
+        is_optimistic: bool,
+        protocol_id: Option<acp_v1::MessageId>,
+        chunk: acp_v2::ContentBlock,
+        indented: bool,
+        created_at: Option<DateTime<Utc>>,
         cx: &mut Context<Self>,
     ) {
         let language_registry = self.project.read(cx).languages().clone();
@@ -4787,6 +4845,7 @@ impl AcpThread {
             content.append_prompt(chunk, &language_registry, path_style, cx);
             self.push_entry(
                 AgentThreadEntry::UserMessage(UserMessage {
+                    created_at,
                     identity: MessageIdentity::Legacy(protocol_id),
                     meta: None,
                     client_id: incoming_client_id,
@@ -4819,12 +4878,43 @@ impl AcpThread {
         self.push_assistant_content_block_with_message_id(None, chunk, is_thought, indented, cx)
     }
 
+    pub fn push_assistant_content_block_with_timestamp(
+        &mut self,
+        chunk: acp_v2::ContentBlock,
+        is_thought: bool,
+        created_at: Option<DateTime<Utc>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.push_assistant_content_block_with_message_id_and_timestamp(
+            None, chunk, is_thought, false, created_at, cx,
+        )
+    }
+
     fn push_assistant_content_block_with_message_id(
         &mut self,
         message_id: Option<acp_v1::MessageId>,
         chunk: acp_v2::ContentBlock,
         is_thought: bool,
         indented: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.push_assistant_content_block_with_message_id_and_timestamp(
+            message_id,
+            chunk,
+            is_thought,
+            indented,
+            self.captured_message_timestamp(),
+            cx,
+        )
+    }
+
+    fn push_assistant_content_block_with_message_id_and_timestamp(
+        &mut self,
+        message_id: Option<acp_v1::MessageId>,
+        chunk: acp_v2::ContentBlock,
+        is_thought: bool,
+        indented: bool,
+        created_at: Option<DateTime<Utc>>,
         cx: &mut Context<Self>,
     ) {
         let path_style = self.project.read(cx).path_style(cx);
@@ -4886,12 +4976,14 @@ impl AcpThread {
                     let block = MessageContent::new(chunk, &language_registry, path_style, cx);
                     if is_thought {
                         chunks.push(AssistantMessageChunk::Thought {
+                            created_at,
                             identity: MessageIdentity::Legacy(message_id),
                             meta: None,
                             block,
                         })
                     } else {
                         chunks.push(AssistantMessageChunk::Message {
+                            created_at,
                             identity: MessageIdentity::Legacy(message_id),
                             meta: None,
                             block,
@@ -4903,12 +4995,14 @@ impl AcpThread {
             let block = MessageContent::new(chunk, &language_registry, path_style, cx);
             let chunk = if is_thought {
                 AssistantMessageChunk::Thought {
+                    created_at,
                     identity: MessageIdentity::Legacy(message_id),
                     meta: None,
                     block,
                 }
             } else {
                 AssistantMessageChunk::Message {
+                    created_at,
                     identity: MessageIdentity::Legacy(message_id),
                     meta: None,
                     block,
@@ -6358,6 +6452,7 @@ impl AcpThread {
                 this.update(cx, |this, cx| {
                     this.push_entry(
                         AgentThreadEntry::UserMessage(UserMessage {
+                            created_at: Some(Utc::now()),
                             identity: MessageIdentity::Legacy(None),
                             meta: None,
                             client_id: client_id.clone(),
@@ -10589,6 +10684,171 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_message_timestamp_streaming_and_history(cx: &mut gpui::TestAppContext) {
+        init_test(cx);
+        let project = Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let connection = Rc::new(FakeAgentConnection::new());
+        let thread = cx
+            .update(|cx| {
+                connection.new_session(project, PathList::new(&[Path::new(path!("/test"))]), cx)
+            })
+            .await
+            .expect("new session");
+        let first_time = DateTime::from_timestamp(1_700_000_000, 0).expect("valid time");
+        let later_time = DateTime::from_timestamp(1_700_000_060, 0).expect("valid time");
+
+        thread.update(cx, |thread, cx| {
+            thread.push_user_content_block_with_timestamp(
+                Some(ClientUserMessageId::new()),
+                "prompt".into(),
+                Some(first_time),
+                cx,
+            );
+            thread
+                .handle_session_update(
+                    acp_v1::SessionUpdate::UserMessageChunk(acp_v1::ContentChunk::new(
+                        "prompt".into(),
+                    )),
+                    cx,
+                )
+                .expect("optimistic echo");
+            thread.push_user_content_block_with_timestamp(
+                None,
+                " continued".into(),
+                Some(later_time),
+                cx,
+            );
+            thread.push_assistant_content_block_with_timestamp(
+                "thinking".into(),
+                true,
+                Some(first_time),
+                cx,
+            );
+            thread.push_assistant_content_block_with_timestamp(
+                "answer".into(),
+                false,
+                Some(later_time),
+                cx,
+            );
+            thread.push_assistant_content_block_with_timestamp(
+                " continued".into(),
+                false,
+                Some(first_time),
+                cx,
+            );
+            thread.flush_streaming_text(cx);
+
+            let [
+                AgentThreadEntry::UserMessage(user),
+                AgentThreadEntry::AssistantMessage(assistant),
+            ] = thread.entries()
+            else {
+                panic!("expected user and assistant entries");
+            };
+            assert_eq!(user.created_at, Some(first_time));
+            assert_eq!(user.content.to_markdown(cx), "prompt continued");
+            let [
+                AssistantMessageChunk::Thought {
+                    created_at: thought_time,
+                    ..
+                },
+                AssistantMessageChunk::Message {
+                    created_at: answer_time,
+                    block,
+                    ..
+                },
+            ] = assistant.chunks.as_slice()
+            else {
+                panic!("expected thought and answer");
+            };
+            assert_eq!(*thought_time, Some(first_time));
+            assert_eq!(*answer_time, Some(later_time));
+            assert_eq!(block.to_markdown(cx), "answer continued");
+
+            thread.set_capture_message_timestamps(false);
+            thread
+                .upsert_user_message(
+                    acp_v2::UserMessage::new("historical-user").content(vec!["old prompt".into()]),
+                    cx,
+                )
+                .expect("historical user message");
+            thread
+                .append_message_chunk(
+                    MessageKind::Assistant,
+                    acp_v2::ContentChunk::new("old answer".into(), "historical-answer"),
+                    cx,
+                )
+                .expect("historical answer");
+            thread.set_capture_message_timestamps(true);
+            thread
+                .upsert_assistant_message(
+                    acp_v2::AgentMessage::new("historical-answer")
+                        .content(vec!["updated old answer".into()]),
+                    cx,
+                )
+                .expect("keyed replacement");
+            let Some(AgentThreadEntry::UserMessage(user)) = thread.entries().get(2) else {
+                panic!("expected historical user");
+            };
+            assert_eq!(user.created_at, None);
+            let Some(AgentThreadEntry::AssistantMessage(assistant)) = thread.entries().get(3)
+            else {
+                panic!("expected historical answer");
+            };
+            assert!(matches!(
+                assistant.chunks.first(),
+                Some(AssistantMessageChunk::Message {
+                    created_at: None,
+                    ..
+                })
+            ));
+
+            thread.push_user_content_block_with_timestamp(
+                None,
+                "old native prompt".into(),
+                None,
+                cx,
+            );
+            thread.push_assistant_content_block_with_timestamp(
+                "old native answer".into(),
+                false,
+                None,
+                cx,
+            );
+            let Some(AgentThreadEntry::AssistantMessage(assistant)) = thread.entries().last()
+            else {
+                panic!("expected native replay answer");
+            };
+            assert!(matches!(
+                assistant.chunks.first(),
+                Some(AssistantMessageChunk::Message {
+                    created_at: None,
+                    ..
+                })
+            ));
+
+            thread
+                .upsert_user_message(acp_v2::UserMessage::new("live-user"), cx)
+                .expect("live keyed user");
+            let Some(AgentThreadEntry::UserMessage(user)) = thread.entries().last() else {
+                panic!("expected live keyed user");
+            };
+            let created_at = user.created_at;
+            assert!(created_at.is_some());
+            thread
+                .upsert_user_message(
+                    acp_v2::UserMessage::new("live-user").content(vec!["updated prompt".into()]),
+                    cx,
+                )
+                .expect("live keyed update");
+            let Some(AgentThreadEntry::UserMessage(user)) = thread.entries().last() else {
+                panic!("expected updated keyed user");
+            };
+            assert_eq!(user.created_at, created_at);
+        });
+    }
+
+    #[gpui::test]
     async fn test_push_user_content_block(cx: &mut gpui::TestAppContext) {
         init_test(cx);
 
@@ -10680,11 +10940,13 @@ mod tests {
                         identity,
                         block,
                         meta,
+                        ..
                     }
                     | AssistantMessageChunk::Thought {
                         identity,
                         block,
                         meta,
+                        ..
                     } => (identity, block, meta),
                 }
             }
@@ -19189,6 +19451,7 @@ mod tests {
             );
             thread.push_entry(
                 AgentThreadEntry::UserMessage(UserMessage {
+                    created_at: None,
                     identity: MessageIdentity::Legacy(None),
                     meta: None,
                     client_id: Some(ClientUserMessageId::new()),

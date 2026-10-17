@@ -851,6 +851,19 @@ impl Terminal {
         &self.command
     }
 
+    pub fn command_text(&self, cx: &App) -> Option<String> {
+        match &self.execution {
+            TerminalExecution::Display(state) => state.command().map(str::to_owned),
+            TerminalExecution::Process(_) => {
+                let source = self.command.read(cx).source();
+                source
+                    .strip_prefix("```\n")
+                    .and_then(|source| source.strip_suffix("\n```"))
+                    .map(str::to_owned)
+            }
+        }
+    }
+
     pub fn update_command_label(&mut self, label: &str, cx: &mut App) {
         if let TerminalExecution::Display(state) = &mut self.execution {
             if matches!(state.command, DisplayCommand::Reported(_))

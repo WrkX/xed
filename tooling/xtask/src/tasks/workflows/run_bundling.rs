@@ -40,21 +40,25 @@ pub fn run_bundling() -> Workflow {
         .add_env(("RUST_BACKTRACE", "1"))
         .map(|mut workflow| {
             for job in bundle.into_jobs() {
-                workflow = workflow.add_job(job.name, job.job);
+                workflow = workflow.add_job(job.name, job.job.cond(run_bundling_label_gate()));
             }
             workflow
         })
 }
 
 fn bundle_job(deps: &[&NamedJob]) -> Job {
-    dependant_job(deps)
-        .when(deps.len() == 0, |job|
-            job.cond(Expression::new(
-                indoc! {
-                    r#"(github.event.action == 'labeled' && github.event.label.name == 'run-bundling') ||
-                    (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'run-bundling'))"#,
-                })))
-        .timeout_minutes(60u32)
+    dependant_job(deps).timeout_minutes(60u32)
+}
+
+/// Restricts the bundle jobs to runs that were explicitly requested by adding the
+/// `run-bundling` label to a pull request.
+fn run_bundling_label_gate() -> Expression {
+    Expression::new(
+        indoc! {
+            r#"(github.event.action == 'labeled' && github.event.label.name == 'run-bundling') ||
+            (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'run-bundling'))"#,
+        },
+    )
 }
 
 pub(crate) fn bundle_mac(
@@ -250,7 +254,26 @@ pub(crate) fn bundle_windows(
 
 fn set_release_channel(platform: Platform, release_channel: ReleaseChannel) -> Step<Run> {
     match release_channel {
+        ReleaseChannel::Dev => set_release_channel_to_dev(platform),
         ReleaseChannel::Nightly => set_release_channel_to_nightly(platform),
+    }
+}
+
+fn set_release_channel_to_dev(platform: Platform) -> Step<Run> {
+    match platform {
+        Platform::Linux | Platform::Mac => named::bash(indoc::indoc! {r#"
+            set -eu
+            version=$(git rev-parse --short HEAD)
+            echo "Publishing version: ${version} on release channel dev"
+            echo "dev" > crates/zed/RELEASE_CHANNEL
+        "#}),
+        Platform::Windows => named::pwsh(indoc::indoc! {r#"
+            $ErrorActionPreference = "Stop"
+            $version = git rev-parse --short HEAD
+            Write-Host "Publishing version: $version on release channel dev"
+            "dev" | Set-Content -Path "crates/zed/RELEASE_CHANNEL"
+        "#})
+        .working_directory("${{ env.ZED_WORKSPACE }}"),
     }
 }
 

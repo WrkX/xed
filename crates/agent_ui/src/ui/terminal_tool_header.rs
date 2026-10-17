@@ -19,6 +19,7 @@ pub struct TerminalToolHeader {
     id: SharedString,
     hover_group: SharedString,
     working_dir: SharedString,
+    title: Option<SharedString>,
     is_expanded: bool,
     elapsed: Option<Duration>,
     running: bool,
@@ -42,6 +43,7 @@ impl TerminalToolHeader {
             id: id.into(),
             hover_group: hover_group.into(),
             working_dir: working_dir.into(),
+            title: None,
             is_expanded,
             elapsed: None,
             running: false,
@@ -53,6 +55,11 @@ impl TerminalToolHeader {
             on_stop: None,
             command_slot: None,
         }
+    }
+
+    pub fn title(mut self, title: impl Into<SharedString>) -> Self {
+        self.title = Some(title.into());
+        self
     }
 
     pub fn elapsed(mut self, elapsed: Duration) -> Self {
@@ -113,6 +120,7 @@ impl RenderOnce for TerminalToolHeader {
             id,
             hover_group,
             working_dir,
+            title,
             is_expanded,
             elapsed,
             running,
@@ -142,6 +150,13 @@ impl RenderOnce for TerminalToolHeader {
             .gap_1()
             .justify_between()
             .rounded_t_md()
+            .when_some(title, |this, title| {
+                this.child(
+                    Label::new(title)
+                        .size(LabelSize::Small)
+                        .color(Color::Default),
+                )
+            })
             .child(
                 div().w_full().min_w_0().overflow_hidden().child(
                     Label::new(working_dir)

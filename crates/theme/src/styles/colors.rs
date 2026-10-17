@@ -113,6 +113,10 @@ pub struct ThemeColors {
     ///
     /// This might be used to show when a toggleable icon button is selected.
     pub icon_accent: Hsla,
+
+    pub agent_command_foreground: Option<Hsla>,
+    pub agent_input_focused_border: Option<Hsla>,
+
     /// Color used to accent some debugger elements
     /// Is used by breakpoints
     pub debugger_accent: Hsla,
@@ -379,6 +383,8 @@ pub enum ThemeColorField {
     IconDisabled,
     IconPlaceholder,
     IconAccent,
+    AgentCommandForeground,
+    AgentInputFocusedBorder,
     StatusBarBackground,
     TitleBarBackground,
     TitleBarInactiveBackground,
@@ -504,6 +510,12 @@ impl ThemeColors {
             ThemeColorField::IconDisabled => self.icon_disabled,
             ThemeColorField::IconPlaceholder => self.icon_placeholder,
             ThemeColorField::IconAccent => self.icon_accent,
+            ThemeColorField::AgentCommandForeground => {
+                self.agent_command_foreground.unwrap_or(self.text)
+            }
+            ThemeColorField::AgentInputFocusedBorder => self
+                .agent_input_focused_border
+                .unwrap_or(self.border_focused),
             ThemeColorField::StatusBarBackground => self.status_bar_background,
             ThemeColorField::TitleBarBackground => self.title_bar_background,
             ThemeColorField::TitleBarInactiveBackground => self.title_bar_inactive_background,

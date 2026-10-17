@@ -287,6 +287,8 @@ impl Message {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserMessage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<DateTime<Utc>>,
     pub id: ClientUserMessageId,
     pub content: Arc<[UserMessageContent]>,
 }
@@ -743,6 +745,8 @@ impl AgentMessage {
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentMessage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<DateTime<Utc>>,
     pub(crate) content: Vec<AgentMessageContent>,
     pub(crate) tool_results: IndexMap<LanguageModelToolUseId, LanguageModelToolResult>,
     pub(crate) reasoning_details: Option<Arc<serde_json::Value>>,
@@ -901,8 +905,14 @@ pub struct AvailableModel {
 #[derive(Debug)]
 pub enum ThreadEvent {
     UserMessage(UserMessage),
-    AgentText(String),
-    AgentThinking(String),
+    AgentText {
+        text: String,
+        created_at: Option<DateTime<Utc>>,
+    },
+    AgentThinking {
+        text: String,
+        created_at: Option<DateTime<Utc>>,
+    },
     ToolCallUpdate(acp_thread::ToolCallUpdate),
     ToolCallAuthorization(ToolCallAuthorization),
     ToolCallAuthorizationResolved {
@@ -1574,9 +1584,11 @@ impl Thread {
                 Message::Agent(assistant_message) => {
                     for content in &assistant_message.content {
                         match content {
-                            AgentMessageContent::Text(text) => stream.send_text(text),
+                            AgentMessageContent::Text(text) => {
+                                stream.send_text(text, assistant_message.created_at)
+                            }
                             AgentMessageContent::Thinking { text, .. } => {
-                                stream.send_thinking(text)
+                                stream.send_thinking(text, assistant_message.created_at)
                             }
                             AgentMessageContent::RedactedThinking(_) => {}
                             AgentMessageContent::ToolUse(tool_use) => {
@@ -2607,8 +2619,11 @@ impl Thread {
         let content = content.into_iter().map(Into::into).collect::<Arc<_>>();
         log::debug!("Thread::send content: {:?}", content);
 
-        self.messages
-            .push(Arc::new(Message::User(UserMessage { id, content })));
+        self.messages.push(Arc::new(Message::User(UserMessage {
+            created_at: Some(Utc::now()),
+            id,
+            content,
+        })));
         cx.notify();
 
         self.send_existing(cx)
@@ -2734,8 +2749,11 @@ impl Thread {
             .into_iter()
             .map(|block| UserMessageContent::from_content_block(block, path_style))
             .collect::<Result<Arc<_>>>()?;
-        self.messages
-            .push(Arc::new(Message::User(UserMessage { id, content })));
+        self.messages.push(Arc::new(Message::User(UserMessage {
+            created_at: Some(Utc::now()),
+            id,
+            content,
+        })));
         cx.notify();
         Ok(())
     }
@@ -2759,6 +2777,7 @@ impl Thread {
         };
 
         self.messages.push(Arc::new(Message::Agent(AgentMessage {
+            created_at: Some(Utc::now()),
             content: vec![AgentMessageContent::Text(text)],
             ..Default::default()
         })));
@@ -3359,6 +3378,7 @@ impl Thread {
                     }
                     CompactionInsertion::Manual { marker_id } => {
                         this.messages.push(Arc::new(Message::User(UserMessage {
+                            created_at: Some(Utc::now()),
                             id: marker_id,
                             content: Arc::from([]),
                         })));
@@ -3479,7 +3499,10 @@ impl Thread {
         match event {
             StartMessage { .. } => {
                 self.flush_pending_message(cx);
-                self.pending_message = Some(AgentMessage::default());
+                self.pending_message = Some(AgentMessage {
+                    created_at: Some(Utc::now()),
+                    ..Default::default()
+                });
             }
             Text(new_text) => self.handle_text_event(new_text, event_stream),
             Thinking { text, signature } => {
@@ -3548,9 +3571,8 @@ impl Thread {
     }
 
     fn handle_text_event(&mut self, new_text: String, event_stream: &ThreadEventStream) {
-        event_stream.send_text(&new_text);
-
         let last_message = self.pending_message();
+        event_stream.send_text(&new_text, last_message.created_at);
         if let Some(AgentMessageContent::Text(text)) = last_message.content.last_mut() {
             text.push_str(&new_text);
         } else {
@@ -3566,9 +3588,8 @@ impl Thread {
         new_signature: Option<String>,
         event_stream: &ThreadEventStream,
     ) {
-        event_stream.send_thinking(&new_text);
-
         let last_message = self.pending_message();
+        event_stream.send_thinking(&new_text, last_message.created_at);
         if let Some(AgentMessageContent::Thinking { text, signature }) =
             last_message.content.last_mut()
         {
@@ -4109,7 +4130,10 @@ impl Thread {
     }
 
     fn pending_message(&mut self) -> &mut AgentMessage {
-        self.pending_message.get_or_insert_default()
+        self.pending_message.get_or_insert_with(|| AgentMessage {
+            created_at: Some(Utc::now()),
+            ..Default::default()
+        })
     }
 
     fn flush_pending_message(&mut self, cx: &mut Context<Self>) {
@@ -5475,16 +5499,22 @@ impl ThreadEventStream {
             .ok();
     }
 
-    fn send_text(&self, text: &str) {
+    fn send_text(&self, text: &str, created_at: Option<DateTime<Utc>>) {
         self.sender
-            .unbounded_send(Ok(ThreadEvent::AgentText(text.to_string())))
-            .ok();
+            .unbounded_send(Ok(ThreadEvent::AgentText {
+                text: text.to_string(),
+                created_at,
+            }))
+            .log_err();
     }
 
-    fn send_thinking(&self, text: &str) {
+    fn send_thinking(&self, text: &str, created_at: Option<DateTime<Utc>>) {
         self.sender
-            .unbounded_send(Ok(ThreadEvent::AgentThinking(text.to_string())))
-            .ok();
+            .unbounded_send(Ok(ThreadEvent::AgentThinking {
+                text: text.to_string(),
+                created_at,
+            }))
+            .log_err();
     }
 
     fn send_tool_call(
@@ -7369,8 +7399,97 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_message_timestamp_serialization() {
+        let historical_user: UserMessage = serde_json::from_value(json!({
+            "id": "historical-user", "content": [{"Text": "old prompt"}]
+        }))
+        .expect("legacy user message");
+        let historical_agent: AgentMessage = serde_json::from_value(json!({
+            "content": [{"Text": "old answer"}],
+            "tool_results": {}, "reasoning_details": null
+        }))
+        .expect("legacy agent message");
+        assert_eq!(historical_user.created_at, None);
+        assert_eq!(historical_agent.created_at, None);
+
+        let created_at = DateTime::from_timestamp(1_700_000_000, 0).expect("valid time");
+        let user = UserMessage {
+            created_at: Some(created_at),
+            ..historical_user
+        };
+        let agent = AgentMessage {
+            created_at: Some(created_at),
+            ..historical_agent
+        };
+        let serialized = serde_json::to_value((&user, &agent)).expect("serialize messages");
+        let (restored_user, restored_agent): (UserMessage, AgentMessage) =
+            serde_json::from_value(serialized).expect("deserialize messages");
+        assert_eq!(restored_user, user);
+        assert_eq!(restored_agent, agent);
+    }
+
+    #[gpui::test]
+    async fn test_message_timestamp_creation_and_replay(cx: &mut TestAppContext) {
+        let (thread, _, _) = setup_thread_for_test(cx).await;
+        let (sender, mut events) = mpsc::unbounded();
+        let stream = ThreadEventStream::new(sender);
+        let (mut replay, user_created_at, created_at) = thread.update(cx, |thread, cx| {
+            thread
+                .push_acp_user_block(
+                    ClientUserMessageId::new(),
+                    [acp_v2::ContentBlock::from("new prompt")],
+                    thread.project.read(cx).path_style(cx),
+                    cx,
+                )
+                .expect("native user message");
+            let Some(Message::User(user)) = thread.messages.last().map(Arc::as_ref) else {
+                panic!("expected stored user message");
+            };
+            let user_created_at = user.created_at;
+            assert!(user_created_at.is_some());
+            thread.handle_thinking_event("thought".into(), None, &stream);
+            let created_at = thread.pending_message().created_at;
+            assert!(created_at.is_some());
+            thread.handle_text_event("answer".into(), &stream);
+            assert_eq!(thread.pending_message().created_at, created_at);
+            thread.flush_pending_message(cx);
+            thread
+                .messages
+                .push(user_text_message(ClientUserMessageId::new(), "old prompt"));
+            thread.messages.push(agent_text_message("old answer"));
+            (thread.replay(cx), user_created_at, created_at)
+        });
+        assert!(matches!(
+            events.next().await,
+            Some(Ok(ThreadEvent::AgentThinking { created_at: event_time, .. }))
+                if event_time == created_at
+        ));
+        assert!(matches!(
+            events.next().await,
+            Some(Ok(ThreadEvent::AgentText { created_at: event_time, .. }))
+                if event_time == created_at
+        ));
+        let mut timestamps = Vec::new();
+        while let Some(event) = replay.next().await {
+            match event.expect("replay event") {
+                ThreadEvent::UserMessage(message) => timestamps.push(message.created_at),
+                ThreadEvent::AgentText { created_at, .. }
+                | ThreadEvent::AgentThinking { created_at, .. } => timestamps.push(created_at),
+                _ => {}
+            }
+        }
+        assert_eq!(timestamps.len(), 5);
+        assert_eq!(timestamps.first(), Some(&user_created_at));
+        assert_eq!(timestamps.get(1), Some(&created_at));
+        assert_eq!(timestamps.get(2), Some(&created_at));
+        assert_eq!(timestamps.get(3), Some(&None));
+        assert_eq!(timestamps.get(4), Some(&None));
+    }
+
     fn user_text_message(id: ClientUserMessageId, text: &str) -> Arc<Message> {
         Arc::new(Message::User(UserMessage {
+            created_at: None,
             id,
             content: vec![UserMessageContent::Text(text.to_string())].into(),
         }))
@@ -8025,7 +8144,7 @@ mod tests {
                 assert!(matches!(&*thread.messages[1], Message::Agent(_)));
                 assert!(matches!(
                     &*thread.messages[2],
-                    Message::User(UserMessage { id, content }) if id == &compact_message_id && content.is_empty()
+                    Message::User(UserMessage { id, content, .. }) if id == &compact_message_id && content.is_empty()
                 ));
                 assert!(matches!(
                     &*thread.messages[3],
@@ -8173,6 +8292,7 @@ mod tests {
                     .push(user_text_message(ClientUserMessageId::new(), "before"));
                 thread.messages.push(agent_text_message("answer"));
                 thread.messages.push(Arc::new(Message::User(UserMessage {
+                    created_at: None,
                     id: marker_id.clone(),
                     content: Arc::from([]),
                 })));
@@ -8531,7 +8651,7 @@ mod tests {
 
         let event = replay_events.next().await;
         assert!(
-            matches!(&event, Some(Ok(ThreadEvent::AgentText(text))) if text == "after"),
+            matches!(&event, Some(Ok(ThreadEvent::AgentText { text, .. })) if text == "after"),
             "expected replayed agent text, got {event:?}"
         );
     }
@@ -9244,6 +9364,7 @@ mod tests {
                 );
 
                 thread.messages.push(Arc::new(Message::Agent(AgentMessage {
+                    created_at: None,
                     content: vec![
                         AgentMessageContent::ToolUse(registered_tool_use),
                         AgentMessageContent::ToolUse(missing_tool_use),

@@ -1068,6 +1068,7 @@ mod tests {
         let agent_settings = AgentSettings {
             enabled: true,
             button: true,
+            threads_button_location: Default::default(),
             dock: DockPosition::Right,
             flexible: true,
             default_width: px(300.),

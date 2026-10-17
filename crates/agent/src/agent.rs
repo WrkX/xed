@@ -2313,22 +2313,23 @@ impl NativeAgentConnection {
                                     .collect::<Vec<_>>();
                                 acp_thread.update(cx, |thread, cx| {
                                     for content in content {
-                                        thread.push_user_content_block(
+                                        thread.push_user_content_block_with_timestamp(
                                             Some(message.id.clone()),
                                             content,
+                                            message.created_at,
                                             cx,
                                         );
                                     }
                                 })?;
                             }
-                            ThreadEvent::AgentText(text) => {
+                            ThreadEvent::AgentText { text, created_at } => {
                                 acp_thread.update(cx, |thread, cx| {
-                                    thread.push_assistant_content_block(text.into(), false, cx)
+                                    thread.push_assistant_content_block_with_timestamp(text.into(), false, created_at, cx)
                                 })?;
                             }
-                            ThreadEvent::AgentThinking(text) => {
+                            ThreadEvent::AgentThinking { text, created_at } => {
                                 acp_thread.update(cx, |thread, cx| {
-                                    thread.push_assistant_content_block(text.into(), true, cx)
+                                    thread.push_assistant_content_block_with_timestamp(text.into(), true, created_at, cx)
                                 })?;
                             }
                             ThreadEvent::ToolCallAuthorization(ToolCallAuthorization {

@@ -27,6 +27,7 @@ mod release_nightly;
 mod run_bundling;
 
 mod release;
+mod release_dev;
 mod run_tests;
 mod runners;
 mod steps;
@@ -240,6 +241,7 @@ pub fn run_workflows(args: GenerateWorkflowArgs) -> Result<()> {
         WorkflowFile::zed(nix_build::nix_build),
         WorkflowFile::zed(publish_extension_cli::publish_extension_cli),
         WorkflowFile::zed(release::release),
+        WorkflowFile::zed(release_dev::release_dev),
         WorkflowFile::zed(release_nightly::release_nightly),
         WorkflowFile::zed(run_bundling::run_bundling),
         WorkflowFile::zed(run_tests::run_tests),

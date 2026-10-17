@@ -1285,6 +1285,7 @@ impl AcpConnection {
                 cx,
             )
         });
+        thread.update(cx, |thread, _| thread.set_capture_message_timestamps(false));
         self.register_session(session_id.clone(), &thread, None, None, None, cx);
 
         // The connection owns this task, so retaining the thread (which owns the
@@ -1350,6 +1351,15 @@ impl AcpConnection {
                                 )
                             });
                         }
+                        if let Err(error) = drain_foreground_queue(&dispatch_tx).await {
+                            connection_state.remove_session(&session_id, thread.entity_id());
+                            connection_state
+                                .remove_pending_session(&session_id, thread.entity_id());
+                            return Err(Arc::new(error));
+                        }
+                        thread
+                            .update(cx, |thread, _| thread.set_capture_message_timestamps(true))
+                            .map_err(Arc::new)?;
                         connection_state.remove_pending_session(&session_id, thread.entity_id());
                         return Ok(());
                     }
@@ -6565,7 +6575,7 @@ exit 7
     // reconstructed thread, not dropped because the session hasn't been
     // registered yet.
     #[gpui::test]
-    async fn test_load_session_replays_notifications_sent_before_response(
+    async fn test_message_timestamp_load_session_replays_notifications_sent_before_response(
         cx: &mut gpui::TestAppContext,
     ) {
         let (
@@ -6631,6 +6641,58 @@ exit 7
             vec!["user", "assistant", "compaction"],
             "replayed notifications should be applied to the thread"
         );
+
+        thread.update(cx, |thread, cx| {
+            for entry in thread.entries() {
+                match entry {
+                    acp_thread::AgentThreadEntry::UserMessage(message) => {
+                        assert_eq!(message.created_at, None);
+                    }
+                    acp_thread::AgentThreadEntry::AssistantMessage(message) => {
+                        for chunk in &message.chunks {
+                            let (acp_thread::AssistantMessageChunk::Message { created_at, .. }
+                            | acp_thread::AssistantMessageChunk::Thought { created_at, .. }) =
+                                chunk;
+                            assert_eq!(*created_at, None);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            thread
+                .handle_session_update(
+                    acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(
+                        acp::ContentBlock::Text(acp::TextContent::new("live prompt")),
+                    )),
+                    cx,
+                )
+                .expect("live user update");
+            thread
+                .handle_session_update(
+                    acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+                        acp::ContentBlock::Text(acp::TextContent::new("live answer")),
+                    )),
+                    cx,
+                )
+                .expect("live agent update");
+            let Some(acp_thread::AgentThreadEntry::UserMessage(message)) = thread.entries().get(3)
+            else {
+                panic!("expected live user message");
+            };
+            assert!(message.created_at.is_some());
+            let Some(acp_thread::AgentThreadEntry::AssistantMessage(message)) =
+                thread.entries().get(4)
+            else {
+                panic!("expected live assistant message");
+            };
+            assert!(matches!(
+                message.chunks.first(),
+                Some(acp_thread::AssistantMessageChunk::Message {
+                    created_at: Some(_),
+                    ..
+                })
+            ));
+        });
     }
 
     #[gpui::test]

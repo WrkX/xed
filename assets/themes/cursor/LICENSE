@@ -1,0 +1,12 @@
+SPDX-License-Identifier: GPL-3.0-or-later
+
+The xed-specific theme mappings and generated port are distributed under the
+repository's GNU General Public License, version 3 or later. See LICENSE-GPL
+in the repository root for the full license text.
+
+Original Cursor Dark palette and visual design: Anysphere / the Cursor team.
+Reference: Cursor 3.25.6, build f0df777c412b670d09e3eaf214967d779e67c088,
+retrieved from the official Cursor distribution on 2026-10-16.
+Original theme SHA-256: 1bb363617342b7724d87a2bab4ef262adaca1ff7a8193655bfe9bbf72550b0e7
+
+This port is not affiliated with or endorsed by Anysphere.

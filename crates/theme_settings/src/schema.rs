@@ -310,6 +310,14 @@ pub fn theme_colors_refinement(
         )
     };
     ThemeColorsRefinement {
+        agent_command_foreground: this
+            .agent_command_foreground
+            .as_ref()
+            .and_then(|color| try_parse_color(color).ok()),
+        agent_input_focused_border: this
+            .agent_input_focused_border
+            .as_ref()
+            .and_then(|color| try_parse_color(color).ok()),
         border,
         border_variant: this
             .border_variant
@@ -913,12 +921,44 @@ fn try_parse_color(color: &str) -> anyhow::Result<Hsla> {
 
 #[cfg(test)]
 mod tests {
-    use theme::StatusColorsRefinement;
+    use refineable::Refineable;
+    use theme::{StatusColorsRefinement, ThemeColors};
 
     use super::{
         StatusColorsContent, ThemeColorsContent, status_colors_refinement, theme_colors_refinement,
         try_parse_color,
     };
+
+    #[test]
+    fn agent_input_focused_border_deserializes_and_refines() -> anyhow::Result<()> {
+        let colors: ThemeColorsContent = serde_json::from_value(serde_json::json!({
+            "agent.input.focused_border": "#dd7744"
+        }))?;
+        let refinement = theme_colors_refinement(&colors, &Default::default(), false);
+        let expected = Some(parse_color("#dd7744"));
+
+        assert_eq!(refinement.agent_input_focused_border, expected);
+        for mut theme_colors in [ThemeColors::light(), ThemeColors::dark()] {
+            assert_eq!(theme_colors.agent_input_focused_border, None);
+            theme_colors.refine(&refinement);
+            assert_eq!(theme_colors.agent_input_focused_border, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn agent_input_focused_border_remains_optional() -> anyhow::Result<()> {
+        let colors: ThemeColorsContent = serde_json::from_value(serde_json::json!({}))?;
+        let refinement = theme_colors_refinement(&colors, &Default::default(), false);
+
+        assert_eq!(colors.agent_input_focused_border, None);
+        assert_eq!(refinement.agent_input_focused_border, None);
+        for mut theme_colors in [ThemeColors::light(), ThemeColors::dark()] {
+            theme_colors.refine(&refinement);
+            assert_eq!(theme_colors.agent_input_focused_border, None);
+        }
+        Ok(())
+    }
 
     #[test]
     fn explicit_diff_hunk_colors_take_precedence_over_fallbacks() {

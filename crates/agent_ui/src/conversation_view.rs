@@ -900,6 +900,9 @@ impl ConversationView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(view) = self.active_thread() {
+            view.update(cx, |view, cx| view.clear_prompt_jump(cx));
+        }
         let Some(connected) = self.as_connected_mut() else {
             return;
         };
@@ -7603,6 +7606,107 @@ pub(crate) mod tests {
             .expect("prompt should succeed");
         cx.run_until_parked();
         (conversation_view, cx)
+    }
+
+    #[gpui::test]
+    async fn test_agent_panel_layout_aligns_tool_timeline_dots(cx: &mut TestAppContext) {
+        init_test(cx);
+        let connection = StubAgentConnection::new();
+        connection.set_next_prompt_updates(vec![
+            acp_v1::SessionUpdate::AgentThoughtChunk(acp_v1::ContentChunk::new("Thinking".into())),
+            acp_v1::SessionUpdate::ToolCall(
+                acp_v1::ToolCall::new("read", "Read file")
+                    .kind(acp_v1::ToolKind::Read)
+                    .status(acp_v1::ToolCallStatus::Completed),
+            ),
+            acp_v1::SessionUpdate::ToolCall(
+                acp_v1::ToolCall::new("search", "Search files")
+                    .kind(acp_v1::ToolKind::Search)
+                    .status(acp_v1::ToolCallStatus::Completed)
+                    .content(vec![acp_v1::ToolCallContent::Content(
+                        acp_v1::Content::new("Found matching files"),
+                    )]),
+            ),
+            acp_v1::SessionUpdate::AgentMessageChunk(acp_v1::ContentChunk::new("Finished".into())),
+        ]);
+        let (conversation_view, cx) =
+            setup_full_size_conversation_and_send(connection, "Check files", cx).await;
+        active_thread(&conversation_view, cx).update_in(cx, |view, window, cx| {
+            view.scroll_to_top(cx);
+            view.focus_handle.focus(window, cx);
+        });
+        cx.run_until_parked();
+
+        let thought = cx
+            .debug_bounds("timeline-dot-assistant-1-0")
+            .expect("thought dot");
+        let answer = cx
+            .debug_bounds("timeline-dot-assistant-4-0")
+            .expect("answer dot");
+        for (dot, icon) in [
+            ("timeline-dot-tool-2", "tool-call-icon-2"),
+            ("timeline-dot-tool-3", "tool-call-icon-3"),
+        ] {
+            let dot = cx.debug_bounds(dot).expect("tool dot");
+            let icon = cx.debug_bounds(icon).expect("tool icon");
+            let label = cx.debug_bounds("tool-call-label-2");
+            let activity = cx.debug_bounds("timeline-dot-tool-2-activity");
+            assert_eq!(dot.center().x, thought.center().x);
+            assert_eq!(dot.center().x, answer.center().x);
+            assert!(
+                (dot.center().y - icon.center().y).abs() <= px(1.),
+                "dot {dot:?}, icon {icon:?}, label {label:?}, activity {activity:?}"
+            );
+        }
+    }
+
+    #[gpui::test]
+    async fn test_agent_panel_layout_keeps_rows_when_pinned_prompt_appears(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+        let connection = StubAgentConnection::new();
+        connection.set_next_prompt_updates(vec![acp_v1::SessionUpdate::AgentMessageChunk(
+            acp_v1::ContentChunk::new("Visible answer paragraph.\n\n".repeat(100).into()),
+        )]);
+        let (conversation_view, cx) =
+            setup_full_size_conversation_and_send(connection, "Latest prompt", cx).await;
+        let thread_view = active_thread(&conversation_view, cx);
+        let pinned = cx
+            .debug_bounds("pinned-latest-prompt")
+            .expect("pinned prompt");
+        cx.simulate_click(pinned.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+
+        for viewport in [size(px(800.), px(600.)), size(px(480.), px(360.))] {
+            cx.simulate_resize(viewport);
+            for index in [0, 1, 0, 1] {
+                thread_view.update_in(cx, |view, window, cx| {
+                    view.focus_handle.focus(window, cx);
+                    view.list_state.scroll_to(ListOffset {
+                        item_ix: index,
+                        offset_in_item: px(0.),
+                    });
+                    cx.notify();
+                });
+                cx.run_until_parked();
+                cx.refresh().expect("draw transcript");
+                assert_eq!(
+                    cx.debug_bounds("pinned-latest-prompt").is_some(),
+                    index == 1
+                );
+                assert!(
+                    cx.debug_bounds("message-content-1-0-0").is_some(),
+                    "answer disappeared at item {index}"
+                );
+                thread_view.read_with(cx, |view, _| {
+                    assert!(
+                        view.list_state.bounds_for_item(1).is_some(),
+                        "answer has no layout"
+                    );
+                });
+            }
+        }
     }
 
     #[gpui::test]

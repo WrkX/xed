@@ -9,7 +9,6 @@ use agent_client_protocol::schema::v2 as acp_v2;
 use agent_settings::{AgentProfileId, AgentSettings, AutoCompactThreshold, COMPACTION_PROMPT};
 use anyhow::Result;
 use client::{Client, RefreshLlmTokenListener, UserStore};
-use collections::IndexMap;
 use context_server::{ContextServer, ContextServerCommand, ContextServerId};
 use feature_flags::FeatureFlagAppExt as _;
 use fs::{FakeFs, Fs};
@@ -4810,14 +4809,17 @@ async fn test_send_retry_finishes_tool_calls_on_error(cx: &mut TestAppContext) {
     cx.run_until_parked();
     events.collect::<Vec<_>>().await;
     thread.read_with(cx, |thread, _cx| {
+        let message = thread.last_received_or_pending_message();
+        let Some(Message::Agent(message)) = message.as_deref() else {
+            panic!("expected agent message");
+        };
         assert_eq!(
-            thread.last_received_or_pending_message().as_deref(),
-            Some(&Message::Agent(AgentMessage {
-                content: vec![AgentMessageContent::Text("Done".into())],
-                tool_results: IndexMap::default(),
-                reasoning_details: None,
-            }))
+            message.content,
+            vec![AgentMessageContent::Text("Done".into())]
         );
+        assert!(message.tool_results.is_empty());
+        assert!(message.reasoning_details.is_none());
+        assert!(message.created_at.is_some());
     })
 }
 

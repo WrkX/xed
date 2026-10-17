@@ -736,6 +736,13 @@ pub struct ThemeColorsContent {
     #[serde(rename = "icon.accent")]
     pub icon_accent: Option<ThemeColor>,
 
+    /// Text color for shell commands in agent tool cards.
+    #[serde(rename = "agent.command.foreground")]
+    pub agent_command_foreground: Option<ThemeColor>,
+
+    #[serde(rename = "agent.input.focused_border")]
+    pub agent_input_focused_border: Option<ThemeColor>,
+
     /// Color used to accent some of the debuggers elements
     /// Only accent breakpoint & breakpoint related symbols right now
     #[serde(rename = "debugger.accent")]
