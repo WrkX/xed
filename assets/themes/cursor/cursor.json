@@ -9,6 +9,7 @@
       "style": {
         "background.appearance": "opaque",
         "agent.command.foreground": "#9A9A9A",
+        "agent.input.focused_border": "#F54942",
         "background": "#141414",
         "border": "#F0F0F013",
         "border.variant": "#F0F0F013",

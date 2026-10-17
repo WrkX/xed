@@ -27,11 +27,11 @@ use file_icons::FileIcons;
 use fs::Fs;
 use futures::FutureExt as _;
 use gpui::{
-    Action, Animation, AnimationExt, App, ClickEvent, ClipboardItem, CursorStyle, ElementId, Empty,
-    Entity, EventEmitter, FocusHandle, Focusable, Hsla, ListOffset, ListState, ObjectFit,
-    PlatformDisplay, ScrollHandle, SharedString, StyledText, Subscription, Task, TextRun,
-    TextStyle, WeakEntity, Window, WindowHandle, div, ease_in_out, img, linear_color_stop,
-    linear_gradient, list, pulsating_between,
+    Action, Animation, AnimationExt, App, ClickEvent, ClipboardItem, ElementId, Empty, Entity,
+    EventEmitter, FocusHandle, Focusable, Hsla, ListOffset, ListState, ObjectFit, PlatformDisplay,
+    ScrollHandle, SharedString, StyledText, Subscription, Task, TextRun, TextStyle, WeakEntity,
+    Window, WindowHandle, div, ease_in_out, img, linear_color_stop, linear_gradient, list,
+    pulsating_between,
 };
 use language::{Buffer, Language, Rope};
 use language_model::{
@@ -61,9 +61,8 @@ use text::Anchor;
 use theme_settings::{AgentBufferFontSize, AgentUiFontSize};
 use ui::{
     Callout, CircularProgress, CommonAnimationExt, ContextMenu, ContextMenuEntry, CopyButton,
-    DecoratedIcon, DiffStat, Disclosure, Divider, DividerColor, IconDecoration, IconDecorationKind,
-    KeyBinding, PopoverMenu, PopoverMenuHandle, TintColor, Tooltip, WithScrollbar, prelude::*,
-    right_click_menu,
+    DiffStat, Disclosure, Divider, DividerColor, KeyBinding, PopoverMenu, PopoverMenuHandle,
+    TintColor, Tooltip, WithScrollbar, prelude::*, right_click_menu,
 };
 use util::{
     ResultExt, debug_panic, defer,
@@ -7643,21 +7642,252 @@ pub(crate) mod tests {
         let answer = cx
             .debug_bounds("timeline-dot-assistant-4-0")
             .expect("answer dot");
-        for (dot, icon) in [
-            ("timeline-dot-tool-2", "tool-call-icon-2"),
-            ("timeline-dot-tool-3", "tool-call-icon-3"),
+        for (dot, label) in [
+            ("timeline-dot-tool-2", "tool-call-label-2"),
+            ("timeline-dot-tool-3", "tool-call-label-3"),
         ] {
             let dot = cx.debug_bounds(dot).expect("tool dot");
-            let icon = cx.debug_bounds(icon).expect("tool icon");
-            let label = cx.debug_bounds("tool-call-label-2");
-            let activity = cx.debug_bounds("timeline-dot-tool-2-activity");
+            let label = cx.debug_bounds(label).expect("tool label");
             assert_eq!(dot.center().x, thought.center().x);
             assert_eq!(dot.center().x, answer.center().x);
             assert!(
-                (dot.center().y - icon.center().y).abs() <= px(1.),
-                "dot {dot:?}, icon {icon:?}, label {label:?}, activity {activity:?}"
+                (dot.center().y - label.center().y).abs() <= px(1.),
+                "dot {dot:?}, label {label:?}"
             );
         }
+    }
+
+    #[gpui::test]
+    async fn test_tool_file_heading_opens_full_path_and_line(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (conversation_view, cx) =
+            setup_conversation_view(StubAgentServer::new(StubAgentConnection::new()), cx).await;
+        add_to_workspace_with_size(conversation_view.clone(), true, cx);
+        let thread_view = active_thread(&conversation_view, cx);
+        let (thread, project, workspace) = thread_view.read_with(cx, |view, cx| {
+            (
+                view.thread.clone(),
+                view.thread.read(cx).project().clone(),
+                view.workspace.upgrade().expect("workspace"),
+            )
+        });
+        let filesystem = project.read_with(cx, |project, _| project.fs().as_fake());
+        filesystem.insert_tree(
+            util::path!("/project"),
+            serde_json::json!({"first": {"main.rs": "wrong file"}, "second": {"main.rs": "first\nsecond\nthird\n"}}),
+        ).await;
+        for structured_location in [false, true] {
+            thread.update(cx, |thread, cx| {
+                let mut update = acp_v2::ToolCallUpdate::new("read")
+                    .title("Read file /project/second/main.rs")
+                    .kind(acp_v2::ToolKind::Read)
+                    .status(acp_v2::ToolCallStatus::Completed)
+                    .raw_input(serde_json::json!({
+                        "path": util::path!("/project/second/main.rs"),
+                        "start_line": 2,
+                        "end_line": 3,
+                    }));
+                if structured_location {
+                    update = update.locations(vec![
+                        acp_v2::ToolCallLocation::new(acp_v2::AbsolutePath::new(PathBuf::from(
+                            util::path!("/project/second/main.rs"),
+                        )))
+                        .line(1),
+                    ]);
+                }
+                thread.upsert_wire_tool_call(update, cx).expect("file tool");
+            });
+            add_to_workspace_with_size(conversation_view.clone(), true, cx);
+            cx.run_until_parked();
+            assert!(cx.debug_bounds("tool-call-name-0").is_some());
+            let filename = cx.debug_bounds("tool-call-file-0").expect("file heading");
+            cx.simulate_click(
+                filename.origin + point(px(8.), filename.size.height / 2.),
+                gpui::Modifiers::default(),
+            );
+            cx.run_until_parked();
+            let editor = workspace.read_with(cx, |workspace, cx| {
+                workspace
+                    .active_item(cx)
+                    .and_then(|item| item.downcast::<Editor>())
+                    .expect("source file editor")
+            });
+            editor.update_in(cx, |editor, window, cx| {
+                assert_eq!(editor.text(cx), "first\nsecond\nthird\n");
+                let snapshot = editor.snapshot(window, cx);
+                assert_eq!(editor.selections.newest::<Point>(&snapshot).head().row, 1);
+            });
+        }
+    }
+
+    #[gpui::test]
+    async fn test_shell_result_opens_full_output_from_preview_text(cx: &mut TestAppContext) {
+        init_test(cx);
+        for terminal_backed in [false, true] {
+            let (conversation_view, cx) =
+                setup_conversation_view(StubAgentServer::new(StubAgentConnection::new()), cx).await;
+            add_to_workspace_with_size(conversation_view.clone(), true, cx);
+            cx.simulate_resize(if terminal_backed {
+                size(px(800.), px(600.))
+            } else {
+                size(px(400.), px(600.))
+            });
+            let thread_view = active_thread(&conversation_view, cx);
+            let (thread, workspace) = thread_view.read_with(cx, |view, _| {
+                (
+                    view.thread.clone(),
+                    view.workspace.upgrade().expect("workspace"),
+                )
+            });
+            let command = "printf '\\033[32mgreen\\033[0m\\n'\nprintf 'second\\n'";
+            let output = "\x1b[32mgreen\x1b[0m\r\nsecond\r\nthird\r\nfourth\r\nfifth\r\nlast";
+            thread.update(cx, |thread, cx| {
+                let mut update = acp_v2::ToolCallUpdate::new("shell")
+                    .name("Bash")
+                    .title("Print colored output")
+                    .kind(acp_v2::ToolKind::Execute)
+                    .status(acp_v2::ToolCallStatus::InProgress)
+                    .raw_input(serde_json::json!({"command": command}));
+                if terminal_backed {
+                    update = update.content(vec![acp_v2::ToolCallContent::Terminal(
+                        acp_v2::Terminal::new("display"),
+                    )]);
+                }
+                thread
+                    .upsert_wire_tool_call(update, cx)
+                    .expect("running shell");
+            });
+            cx.run_until_parked();
+            assert!(cx.debug_bounds("terminal-output-preview").is_none());
+
+            thread.update(cx, |thread, cx| {
+                if terminal_backed {
+                    thread
+                        .upsert_display_terminal(
+                            "display".into(),
+                            acp_thread::DisplayTerminalPatch {
+                                command: agent_client_protocol::schema::MaybeUndefined::Value(
+                                    command.into(),
+                                ),
+                                output: agent_client_protocol::schema::MaybeUndefined::Value(
+                                    acp_thread::DisplayTerminalOutput {
+                                        data: output.as_bytes().to_vec(),
+                                        meta: None,
+                                    },
+                                ),
+                                exit_status: agent_client_protocol::schema::MaybeUndefined::Value(
+                                    acp_v2::TerminalExitStatus::new().exit_code(0),
+                                ),
+                                ..Default::default()
+                            },
+                            cx,
+                        )
+                        .expect("terminal output");
+                }
+                thread
+                    .upsert_wire_tool_call(
+                        acp_v2::ToolCallUpdate::new("shell")
+                            .status(acp_v2::ToolCallStatus::Completed)
+                            .raw_output(serde_json::json!({"stdout": output, "exit_code": 0})),
+                        cx,
+                    )
+                    .expect("finished shell");
+            });
+            cx.run_until_parked();
+            let input = cx.debug_bounds("terminal-command-input").expect("IN row");
+            cx.simulate_click(
+                input.origin + point(px(8.), px(8.)),
+                gpui::Modifiers::default(),
+            );
+            cx.simulate_keystrokes("enter");
+            assert_eq!(
+                cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+                Some(command.to_owned()),
+            );
+            let header = cx
+                .debug_bounds("terminal-tool-header")
+                .expect("shell heading");
+            let dot = cx.debug_bounds("timeline-dot-tool-0").expect("shell dot");
+            assert!((header.center().y - dot.center().y).abs() <= px(1.));
+            let preview = cx
+                .debug_bounds("terminal-output-preview-text")
+                .expect("OUT text");
+            cx.simulate_click(
+                preview.origin + point(px(8.), px(8.)),
+                gpui::Modifiers::default(),
+            );
+            cx.run_until_parked();
+            workspace.read_with(cx, |workspace, cx| {
+                let item = workspace.active_item(cx).expect("output tab");
+                assert!(item.project_path(cx).is_none());
+                let editor = item.downcast::<Editor>().expect("output editor");
+                let editor = editor.read(cx);
+                assert_eq!(editor.text(cx), "green\nsecond\nthird\nfourth\nfifth\nlast");
+                assert_eq!(editor.buffer().read(cx).title(cx), "Terminal output.txt");
+                assert!(!editor.read_only(cx));
+            });
+        }
+    }
+
+    #[gpui::test]
+    async fn test_shell_result_clipboard_fallback_and_empty_output(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (conversation_view, cx) =
+            setup_conversation_view(StubAgentServer::new(StubAgentConnection::new()), cx).await;
+        add_to_workspace_with_size(conversation_view.clone(), true, cx);
+        let thread_view = active_thread(&conversation_view, cx);
+        let thread = thread_view.read_with(cx, |view, _| view.thread.clone());
+        thread.update(cx, |thread, cx| {
+            thread
+                .upsert_wire_tool_call(
+                    acp_v2::ToolCallUpdate::new("shell")
+                        .kind(acp_v2::ToolKind::Execute)
+                        .status(acp_v2::ToolCallStatus::Completed)
+                        .raw_input(serde_json::json!({"command": "true"}))
+                        .raw_output(serde_json::json!({"exit_code": 0})),
+                    cx,
+                )
+                .expect("unsupported shell result");
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("terminal-output-preview").is_none());
+        thread.update(cx, |thread, cx| {
+            thread
+                .upsert_wire_tool_call(
+                    acp_v2::ToolCallUpdate::new("shell")
+                        .raw_output(serde_json::json!({"stdout": "", "exit_code": 0})),
+                    cx,
+                )
+                .expect("known empty output");
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("terminal-output-preview-text").is_some());
+        thread.update(cx, |thread, cx| {
+            thread.upsert_wire_tool_call(
+                acp_v2::ToolCallUpdate::new("shell")
+                    .raw_output(serde_json::json!({"stdout": "\u{1b}[31mfailed\u{1b}[0m\nfull output", "exit_code": 7})),
+                cx,
+            ).expect("failed output");
+        });
+        thread_view.update(cx, |view, cx| {
+            view.workspace = gpui::WeakEntity::new_invalid();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("terminal-tool-failed-Some(7)").is_some());
+        let preview = cx
+            .debug_bounds("terminal-output-preview-text")
+            .expect("OUT text");
+        cx.simulate_click(
+            preview.origin + point(px(8.), px(8.)),
+            gpui::Modifiers::default(),
+        );
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+            Some("failed\nfull output".to_owned()),
+        );
+        thread_view.read_with(cx, |view, _| assert!(view.thread_error.is_some()));
     }
 
     #[gpui::test]

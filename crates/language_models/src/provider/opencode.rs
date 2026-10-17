@@ -1036,14 +1036,7 @@ struct RichCatalogModel {
     modalities: ModelModalities,
     limit: ModelLimits,
     provider: Option<ModelTransport>,
-    cost: Option<ModelCost>,
     status: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ModelCost {
-    input: Option<f64>,
-    output: Option<f64>,
 }
 
 #[derive(Default, Deserialize)]
@@ -1062,7 +1055,8 @@ struct ModelLimits {
 
 #[derive(Deserialize)]
 struct ModelTransport {
-    npm: String,
+    #[serde(default)]
+    npm: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1092,13 +1086,7 @@ fn parse_discovered_models(
         .models
         .into_iter()
         .filter_map(|(catalog_id, metadata)| {
-            if metadata.status.as_deref() == Some("deprecated")
-                || (subscription == OpenCodeSubscription::Zen
-                    && metadata
-                        .cost
-                        .as_ref()
-                        .is_some_and(|cost| cost.input == Some(0.0) && cost.output == Some(0.0)))
-            {
+            if metadata.status.as_deref() == Some("deprecated") {
                 compatible_candidate_count -= 1;
                 return None;
             }
@@ -1113,10 +1101,13 @@ fn parse_discovered_models(
             {
                 return None;
             }
+            // Models routed through OpenCode's gateway advertise only a `provider.api`
+            // endpoint, so they have no `npm` of their own and fall back to the
+            // provider-level transport.
             let transport = metadata
                 .provider
                 .as_ref()
-                .map(|provider| provider.npm.as_str())
+                .and_then(|provider| provider.npm.as_deref())
                 .or(provider.npm.as_deref());
             let protocol = transport.and_then(protocol_for_transport)?;
             let reasoning_effort_levels = metadata
@@ -1756,43 +1747,55 @@ mod tests {
     }
 
     #[test]
-    fn test_discovery_excludes_only_explicitly_free_zen_models() -> Result<()> {
-        for (cost, zen_model_count) in [
-            (serde_json::json!({"input": 0, "output": 0}), 0),
-            (serde_json::json!({"input": 0, "output": 1}), 1),
-            (serde_json::json!({"input": 1, "output": 0}), 1),
-            (serde_json::json!({"input": 1, "output": 1}), 1),
-            (serde_json::json!({"input": 0}), 1),
-            (serde_json::json!({"output": 0}), 1),
-            (serde_json::json!({}), 1),
-            (serde_json::Value::Null, 1),
-        ] {
-            let provider = serde_json::json!({
+    fn test_discovery_includes_free_models() -> Result<()> {
+        let provider = serde_json::json!({
+            "npm": "@ai-sdk/openai-compatible",
+            "models": {
+                "free-model": {
+                    "id": "free-model",
+                    "name": "Free Model",
+                    "tool_call": true,
+                    "modalities": {"output": ["text"]},
+                    "limit": {"context": 1000},
+                    "cost": {"input": 0, "output": 0},
+                },
+            },
+        });
+        let catalog = serde_json::json!({
+            "opencode": provider,
+            "opencode-go": provider,
+        })
+        .to_string();
+        for subscription in [OpenCodeSubscription::Zen, OpenCodeSubscription::Go] {
+            let models = parse_discovered_models(&catalog, subscription)?;
+            assert_eq!(models.len(), 1, "{subscription:?}");
+            assert_eq!(models[0].model.id(), "free-model");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_discovery_accepts_provider_api_without_npm() -> Result<()> {
+        let catalog = serde_json::json!({
+            "opencode": {
                 "npm": "@ai-sdk/openai-compatible",
                 "models": {
-                    "model": {
-                        "id": "model",
-                        "name": "Model",
+                    "gateway-model": {
+                        "id": "gateway-model",
+                        "name": "Gateway Model",
                         "tool_call": true,
                         "modalities": {"output": ["text"]},
                         "limit": {"context": 1000},
-                        "cost": cost,
+                        "provider": {"api": "https://opencode.ai/inference/openai/v1"},
                     },
                 },
-            });
-            let catalog = serde_json::json!({
-                "opencode": provider,
-                "opencode-go": provider,
-            })
-            .to_string();
-            for (subscription, expected_count) in [
-                (OpenCodeSubscription::Zen, zen_model_count),
-                (OpenCodeSubscription::Go, 1),
-            ] {
-                let models = parse_discovered_models(&catalog, subscription)?;
-                assert_eq!(models.len(), expected_count, "{subscription:?}: {cost}");
-            }
-        }
+            },
+        })
+        .to_string();
+        let models = parse_discovered_models(&catalog, OpenCodeSubscription::Zen)?;
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].model.id(), "gateway-model");
+        assert_eq!(models[0].model.protocol(), ApiProtocol::OpenAiChat);
         Ok(())
     }
 

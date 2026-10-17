@@ -1405,6 +1405,10 @@ impl ToolCall {
         self.local_status = Some(status);
     }
 
+    pub fn title(&self) -> Option<&SharedString> {
+        self.effective_title()
+    }
+
     fn effective_title(&self) -> Option<&SharedString> {
         self.title.as_ref().filter(|title| !title.trim().is_empty())
     }
@@ -1676,6 +1680,10 @@ impl ToolCall {
         } else {
             &self.structured_content
         }
+    }
+
+    pub fn structured_content(&self) -> &[ToolCallContent] {
+        &self.structured_content
     }
 
     fn apply_reported_status(&mut self, status: MaybeUndefined<acp_v2::ToolCallStatus>) {

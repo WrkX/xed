@@ -20,6 +20,8 @@ pub struct TerminalToolHeader {
     hover_group: SharedString,
     working_dir: SharedString,
     title: Option<SharedString>,
+    description: Option<SharedString>,
+    heading_height: Option<gpui::Pixels>,
     is_expanded: bool,
     elapsed: Option<Duration>,
     running: bool,
@@ -44,6 +46,8 @@ impl TerminalToolHeader {
             hover_group: hover_group.into(),
             working_dir: working_dir.into(),
             title: None,
+            description: None,
+            heading_height: None,
             is_expanded,
             elapsed: None,
             running: false,
@@ -59,6 +63,16 @@ impl TerminalToolHeader {
 
     pub fn title(mut self, title: impl Into<SharedString>) -> Self {
         self.title = Some(title.into());
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn heading_height(mut self, height: gpui::Pixels) -> Self {
+        self.heading_height = Some(height);
         self
     }
 
@@ -111,7 +125,7 @@ impl TerminalToolHeader {
 }
 
 impl RenderOnce for TerminalToolHeader {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let show_elapsed = self
             .elapsed
             .is_some_and(|elapsed| elapsed > ELAPSED_DISPLAY_THRESHOLD);
@@ -121,6 +135,8 @@ impl RenderOnce for TerminalToolHeader {
             hover_group,
             working_dir,
             title,
+            description,
+            heading_height,
             is_expanded,
             elapsed,
             running,
@@ -134,6 +150,8 @@ impl RenderOnce for TerminalToolHeader {
         } = self;
 
         let child_id = |name: &str| format!("terminal-tool-{name}-{id}");
+        let compact = title.is_some();
+        let directory_tooltip = format!("Working directory: {working_dir}");
 
         let header_bg = cx
             .theme()
@@ -143,6 +161,7 @@ impl RenderOnce for TerminalToolHeader {
 
         let header_row = h_flex()
             .id(child_id("header"))
+            .debug_selector(|| "terminal-tool-header".into())
             .pt_1()
             .pl_1p5()
             .pr_1()
@@ -150,29 +169,51 @@ impl RenderOnce for TerminalToolHeader {
             .gap_1()
             .justify_between()
             .rounded_t_md()
+            .when(compact, |this| {
+                this.pt_0()
+                    .pl_0()
+                    .pr_0()
+                    .min_h(window.line_height() - px(2.))
+            })
+            .when_some(heading_height, |this, height| this.h(height))
+            .tooltip(Tooltip::text(directory_tooltip))
             .when_some(title, |this, title| {
                 this.child(
                     Label::new(title)
                         .size(LabelSize::Small)
+                        .weight(gpui::FontWeight::BOLD)
                         .color(Color::Default),
                 )
             })
-            .child(
-                div().w_full().min_w_0().overflow_hidden().child(
-                    Label::new(working_dir)
-                        .buffer_font(cx)
-                        .size(LabelSize::XSmall)
-                        .color(Color::Muted)
-                        .truncate_start(),
-                ),
-            )
-            .child(
-                Disclosure::new(child_id("disclosure"), is_expanded)
-                    .opened_icon(IconName::ChevronUp)
-                    .closed_icon(IconName::ChevronDown)
-                    .visible_on_hover(&hover_group)
-                    .when_some(on_toggle_expand, |this, handler| this.on_click(handler)),
-            )
+            .child(div().flex_1().min_w_0().overflow_hidden().map(|this| {
+                if compact {
+                    this.when_some(description, |this, description| {
+                        this.child(
+                            Label::new(description)
+                                .size(LabelSize::Small)
+                                .color(Color::Muted)
+                                .truncate(),
+                        )
+                    })
+                } else {
+                    this.child(
+                        Label::new(working_dir)
+                            .buffer_font(cx)
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted)
+                            .truncate_start(),
+                    )
+                }
+            }))
+            .when(!compact, |this| {
+                this.child(
+                    Disclosure::new(child_id("disclosure"), is_expanded)
+                        .opened_icon(IconName::ChevronUp)
+                        .closed_icon(IconName::ChevronDown)
+                        .visible_on_hover(&hover_group)
+                        .when_some(on_toggle_expand, |this, handler| this.on_click(handler)),
+                )
+            })
             .when(show_elapsed, |header| {
                 let elapsed = elapsed.unwrap_or_default();
                 header.child(
@@ -262,6 +303,9 @@ impl RenderOnce for TerminalToolHeader {
             .group(hover_group)
             .text_xs()
             .bg(header_bg)
+            .when(compact, |this| {
+                this.gap_2().bg(cx.theme().colors().panel_background)
+            })
             .child(header_row)
             .children(command_slot)
     }

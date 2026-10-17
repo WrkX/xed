@@ -15,7 +15,11 @@ use futures::{
     channel::mpsc::{UnboundedReceiver, unbounded},
 };
 
-use alacritty_terminal::grid::Dimensions as _;
+use alacritty_terminal::{
+    grid::Dimensions as _,
+    index::{Column, Line, Point as AlacrittyPoint},
+    term::cell::{Flags, LineLength as _},
+};
 use itertools::Itertools as _;
 use mappings::mouse::{
     alt_scroll, grid_point, grid_point_and_side, mouse_button_report, mouse_moved_report,
@@ -2527,6 +2531,90 @@ impl Terminal {
         content_text(&term)
     }
 
+    pub fn styled_content_preview(&self, max_lines: usize) -> ParsedAnsiText {
+        if max_lines == 0 {
+            return ParsedAnsiText::default();
+        }
+
+        let term = self.term.lock_unfair();
+        let grid = term.grid();
+        let mut handler = StyledAnsiTextHandler::default();
+        let mut completed_lines = 0;
+        let mut reached_bottom = false;
+
+        for line_index in grid.topmost_line().0..=grid.bottommost_line().0 {
+            let line = Line(line_index);
+            let row = &grid[line];
+            let row_start_offset = handler.text.len();
+            let mut tab_mode = false;
+
+            for (column, cell) in row[..].iter().take(row.line_length().0).enumerate() {
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+
+                if tab_mode && cell.c == ' ' {
+                    // Terminal extraction honors tab stops changed by the process.
+                    let prefix = term.bounds_to_string(
+                        AlacrittyPoint::new(line, Column(0)),
+                        AlacrittyPoint::new(line, Column(column)),
+                    );
+                    if prefix.len() <= handler.text.len() - row_start_offset {
+                        continue;
+                    }
+                }
+                tab_mode = cell.c == '\t';
+
+                let (foreground, background) = if cell.flags.contains(Flags::INVERSE) {
+                    (cell.bg, cell.fg)
+                } else {
+                    (cell.fg, cell.bg)
+                };
+                let foreground =
+                    (foreground != Color::Named(NamedColor::Foreground)).then_some(foreground);
+                let background =
+                    (background != Color::Named(NamedColor::Background)).then_some(background);
+                if handler.current_foreground_color != foreground {
+                    handler.break_foreground_span(foreground);
+                }
+                if handler.current_background_color != background {
+                    handler.break_background_span(background);
+                }
+                handler.input(cell.c);
+                for character in cell.zerowidth().into_iter().flatten() {
+                    handler.input(*character);
+                }
+            }
+
+            reached_bottom = line == grid.bottommost_line();
+            if !row[..]
+                .last()
+                .is_some_and(|cell| cell.flags.contains(Flags::WRAPLINE))
+            {
+                completed_lines += 1;
+                if completed_lines == max_lines || reached_bottom {
+                    break;
+                }
+                handler.linefeed();
+            }
+        }
+
+        let mut parsed = handler.finish();
+        if reached_bottom && parsed.text.ends_with('\n') {
+            parsed.text.pop();
+        }
+        for spans in [&mut parsed.foreground_spans, &mut parsed.background_spans] {
+            for (range, _) in spans.iter_mut() {
+                range.end = range.end.min(parsed.text.len());
+            }
+            spans.retain(|(range, _)| !range.is_empty());
+        }
+        parsed
+    }
+
     pub fn last_n_non_empty_lines(&self, n: usize) -> Vec<String> {
         let terminal = self.term.lock_unfair();
         last_non_empty_lines(&terminal, n)
@@ -4984,6 +5072,160 @@ mod tests {
             let term = terminal.term.lock_unfair();
             make_content(&term, &terminal.last_content)
         })
+    }
+
+    #[gpui::test]
+    fn styled_content_preview_preserves_colors_and_first_lines(cx: &mut TestAppContext) {
+        let terminal = display_only_terminal(cx);
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_raw_output(
+                b"\x1b[31;44mR\xc3\xa9d\x1b[0m plain\r\n\x1b[38;2;12;34;56mtrue\x1b[48;5;123mbg\x1b[0m\r\n\x1b[7mreverse\x1b[0m\r\n\x1b[32mgreen\x1b[0m\r\nomitted",
+                cx,
+            );
+        });
+        terminal.read_with(cx, |terminal, _| {
+            let preview = terminal.styled_content_preview(4);
+            assert_eq!(preview.text, "Réd plain\ntruebg\nreverse\ngreen");
+            assert_eq!(
+                preview.text,
+                terminal.get_content().lines().take(4).join("\n")
+            );
+            let color_at = |spans: &AnsiSpans, offset| {
+                spans
+                    .iter()
+                    .find(|(range, _)| range.contains(&offset))
+                    .and_then(|(_, color)| *color)
+            };
+            assert_eq!(
+                color_at(&preview.foreground_spans, 0),
+                Some(Color::Named(NamedColor::Red))
+            );
+            assert_eq!(
+                color_at(&preview.background_spans, 0),
+                Some(Color::Named(NamedColor::Blue))
+            );
+            assert_eq!(color_at(&preview.foreground_spans, 5), None);
+            assert_eq!(color_at(&preview.background_spans, 5), None);
+            assert_eq!(
+                color_at(&preview.foreground_spans, 11),
+                Some(Color::Spec(Rgb {
+                    r: 12,
+                    g: 34,
+                    b: 56
+                }))
+            );
+            assert_eq!(
+                color_at(&preview.background_spans, 15),
+                Some(Color::Indexed(123))
+            );
+            assert_eq!(
+                color_at(&preview.foreground_spans, 18),
+                Some(Color::Named(NamedColor::Background))
+            );
+            assert_eq!(
+                color_at(&preview.background_spans, 18),
+                Some(Color::Named(NamedColor::Foreground))
+            );
+            for (range, _) in preview
+                .foreground_spans
+                .iter()
+                .chain(&preview.background_spans)
+            {
+                assert!(!range.is_empty());
+                assert!(preview.text.is_char_boundary(range.start));
+                assert!(preview.text.is_char_boundary(range.end));
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn styled_content_preview_matches_empty_and_trailing_lines(cx: &mut TestAppContext) {
+        let terminal = display_only_terminal(cx);
+        terminal.read_with(cx, |terminal, _| {
+            assert_eq!(
+                terminal.styled_content_preview(0),
+                ParsedAnsiText::default()
+            );
+            assert_eq!(
+                terminal.styled_content_preview(4).text,
+                terminal.get_content().lines().take(4).join("\n")
+            );
+        });
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_raw_output(b"\r\n\r\nfirst\r\n\r\nlast\r\n", cx);
+        });
+        terminal.read_with(cx, |terminal, _| {
+            for max_lines in (0..=terminal.total_lines()).chain([usize::MAX]) {
+                assert_eq!(
+                    terminal.styled_content_preview(max_lines).text,
+                    terminal.get_content().lines().take(max_lines).join("\n"),
+                    "preview limited to {max_lines} lines"
+                );
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn styled_content_preview_reads_scrollback_without_scrolling(cx: &mut TestAppContext) {
+        let terminal = display_only_terminal(cx);
+        terminal.update(cx, |terminal, cx| {
+            let output = (0..terminal.viewport_lines() + 10)
+                .map(|line| format!("line {line}\r\n"))
+                .collect::<String>();
+            terminal.write_raw_output(output.as_bytes(), cx);
+            let mut term = terminal.term.lock_unfair();
+            scroll_display(&mut term, Scroll::Delta(3));
+            terminal.last_content = make_content(&term, &terminal.last_content);
+        });
+        terminal.read_with(cx, |terminal, _| {
+            let offset = display_offset(&terminal.term.lock_unfair());
+            let cursor = terminal.last_content.cursor;
+            let pending_events = terminal.events.len();
+            assert!(offset > 0);
+            assert_eq!(
+                terminal.styled_content_preview(4).text,
+                "line 0\nline 1\nline 2\nline 3"
+            );
+            assert_eq!(display_offset(&terminal.term.lock_unfair()), offset);
+            assert_eq!(terminal.last_content.display_offset, offset);
+            assert_eq!(terminal.last_content.cursor, cursor);
+            assert_eq!(terminal.events.len(), pending_events);
+        });
+    }
+
+    #[gpui::test]
+    fn styled_content_preview_matches_wrapped_wide_characters_and_tabs(cx: &mut TestAppContext) {
+        let terminal = cx.new(|cx| {
+            TerminalBuilder::new_display_only_with_bounds(
+                SettingsCursorShape::default(),
+                AlternateScroll::On,
+                None,
+                0,
+                cx.background_executor(),
+                PathStyle::local(),
+                TerminalBounds::new(
+                    px(20.),
+                    px(10.),
+                    bounds(point(px(0.), px(0.)), size(px(80.), px(120.))),
+                ),
+            )
+            .subscribe(cx)
+        });
+        terminal.update(cx, |terminal, cx| {
+            terminal.write_raw_output(
+                "\x1b[3g\x1b[5G\x1bH\ra\t b\r\nabcdefg界e\u{301} more\r\nlast".as_bytes(),
+                cx,
+            );
+        });
+        terminal.read_with(cx, |terminal, _| {
+            for max_lines in [1, 2, 4, usize::MAX] {
+                assert_eq!(
+                    terminal.styled_content_preview(max_lines).text,
+                    terminal.get_content().lines().take(max_lines).join("\n"),
+                    "preview limited to {max_lines} lines"
+                );
+            }
+        });
     }
 
     #[gpui::test]

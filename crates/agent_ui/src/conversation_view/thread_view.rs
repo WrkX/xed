@@ -58,6 +58,160 @@ use super::*;
 
 const DATA_RETENTION_LEARN_MORE_URL: &str = "https://support.claude.com/en/articles/15425996-data-retention-practices-for-mythos-class-models";
 
+fn tool_heading_name(tool: &ToolCall) -> Option<&'static str> {
+    Some(match tool.kind() {
+        acp_v2::ToolKind::Read => "Read",
+        acp_v2::ToolKind::Edit => "Edit",
+        acp_v2::ToolKind::Delete => "Delete",
+        acp_v2::ToolKind::Move => "Move",
+        acp_v2::ToolKind::Search => "Search",
+        acp_v2::ToolKind::Execute => {
+            if tool
+                .tool_name
+                .as_ref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("bash"))
+            {
+                "Bash"
+            } else {
+                "Terminal"
+            }
+        }
+        acp_v2::ToolKind::Fetch => "Fetch",
+        acp_v2::ToolKind::Think => "Think",
+        acp_v2::ToolKind::SwitchMode => "Switch mode",
+        _ => return None,
+    })
+}
+
+fn shell_command(tool: &ToolCall) -> Option<&str> {
+    let input = tool.raw_input.as_ref()?;
+    input
+        .get("command")
+        .or_else(|| input.get("cmd"))
+        .and_then(serde_json::Value::as_str)
+}
+
+fn tool_heading_description(tool: &ToolCall) -> Option<String> {
+    if let Some(description) = tool
+        .raw_input
+        .as_ref()
+        .and_then(|input| input.get("description"))
+        .and_then(serde_json::Value::as_str)
+    {
+        return Some(description.to_owned());
+    }
+    let title = tool.title()?.as_ref();
+    if matches!(tool.kind(), acp_v2::ToolKind::Execute) {
+        return (Some(title) != shell_command(tool)).then(|| title.to_owned());
+    }
+    let prefixes: &[&str] = match tool.kind() {
+        acp_v2::ToolKind::Read => &["Read file ", "Read "],
+        acp_v2::ToolKind::Edit => &["Edit file ", "Edit "],
+        acp_v2::ToolKind::Search => &["Search files for regex ", "Search files ", "Search "],
+        acp_v2::ToolKind::Delete => &["Delete file ", "Delete "],
+        acp_v2::ToolKind::Move => &["Move file ", "Move "],
+        acp_v2::ToolKind::Fetch => &["Fetch "],
+        _ => &[],
+    };
+    let description = prefixes
+        .iter()
+        .find_map(|prefix| title.strip_prefix(prefix))
+        .unwrap_or(title);
+    let name = tool_heading_name(tool)?;
+    (!description.is_empty()
+        && !description.eq_ignore_ascii_case(name)
+        && description != format!("{name} file"))
+    .then(|| description.to_owned())
+}
+
+fn tool_file_target(tool: &ToolCall) -> Option<(String, Option<u32>, Option<usize>)> {
+    if !matches!(
+        tool.kind(),
+        acp_v2::ToolKind::Read
+            | acp_v2::ToolKind::Edit
+            | acp_v2::ToolKind::Delete
+            | acp_v2::ToolKind::Move
+    ) {
+        return None;
+    }
+    if let [location] = tool.locations.as_slice() {
+        return Some((
+            location.path.to_string_lossy().into_owned(),
+            location.line.map(|line| line.saturating_add(1)),
+            Some(0),
+        ));
+    }
+    if !tool.locations.is_empty() {
+        return None;
+    }
+    let input = tool.raw_input.as_ref()?;
+    let path = input
+        .get("path")
+        .or_else(|| input.get("file_path"))?
+        .as_str()?;
+    let line = input
+        .get("start_line")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|line| u32::try_from(line).ok());
+    Some((path.to_owned(), line, None))
+}
+
+fn tool_file_name(path: &str, path_style: PathStyle) -> &str {
+    if path_style == PathStyle::Windows {
+        path.rsplit(['/', '\\'])
+            .find(|part| !part.is_empty())
+            .unwrap_or(path)
+    } else {
+        path.rsplit('/')
+            .find(|part| !part.is_empty())
+            .unwrap_or(path)
+    }
+}
+
+fn shell_text_output(tool: &ToolCall, cx: &App) -> Option<String> {
+    let content = tool.structured_content();
+    let mut text = Vec::new();
+    for content in content {
+        match content {
+            ToolCallContent::ContentBlock { block, .. } => {
+                text.push(block.text_content(cx)?.to_owned());
+            }
+            _ => return None,
+        }
+    }
+    if !text.is_empty() {
+        return Some(text.join("\n\n"));
+    }
+    let output = tool.raw_output.as_ref()?;
+    if let Some(output) = output.as_str() {
+        return Some(output.to_owned());
+    }
+    let stdout = output.get("stdout").and_then(serde_json::Value::as_str);
+    let stderr = output.get("stderr").and_then(serde_json::Value::as_str);
+    match (stdout, stderr) {
+        (Some(stdout), Some(stderr)) => Some(format!("{stdout}{stderr}")),
+        (Some(text), None) | (None, Some(text)) => Some(text.to_owned()),
+        (None, None) => output
+            .get("output")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+    }
+}
+
+fn shell_result_failed(tool: &ToolCall) -> bool {
+    tool.raw_output.as_ref().is_some_and(|output| {
+        output
+            .get("exit_code")
+            .or_else(|| output.get("exitCode"))
+            .and_then(serde_json::Value::as_i64)
+            .is_some_and(|code| code != 0)
+            || output
+                .get("signal")
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+    })
+}
+
 fn tool_timeline_color(status: ToolCallStatus, command_failed: bool) -> Color {
     if command_failed
         || matches!(
@@ -146,7 +300,7 @@ fn render_message_timestamp(
             .id("message-timestamp")
             .w_full()
             .justify_end()
-            .pb_1()
+            .pb_2()
             .tooltip(Tooltip::text(
                 timestamp
                     .with_timezone(&chrono::Local)
@@ -223,6 +377,7 @@ impl RenderOnce for TerminalCommandInput {
             .when(!focused, |this| this.visible_on_hover(self.id.clone()));
         h_flex()
             .id(self.id.clone())
+            .debug_selector(|| "terminal-command-input".into())
             .group(self.id)
             .track_focus(&focus)
             .tab_index(0)
@@ -268,6 +423,78 @@ fn terminal_output_preview(output: &str) -> (String, bool) {
     let mut lines = output.lines();
     let preview = lines.by_ref().take(4).join("\n");
     (preview, lines.next().is_some())
+}
+
+fn truncate_styled_output(mut output: terminal::ParsedAnsiText) -> terminal::ParsedAnsiText {
+    let (preview, _) = terminal_output_preview(&output.text);
+    output.text = preview;
+    let length = output.text.len();
+    for spans in [&mut output.foreground_spans, &mut output.background_spans] {
+        spans.retain_mut(|(range, _)| {
+            range.end = range.end.min(length);
+            range.start < range.end
+        });
+    }
+    output
+}
+
+fn terminal_color(color: terminal::Color, cx: &App) -> Hsla {
+    match color {
+        terminal::Color::Named(color) => terminal::get_color_at_index(color as usize, cx.theme()),
+        terminal::Color::Indexed(index) => {
+            terminal::get_color_at_index(usize::from(index), cx.theme())
+        }
+        terminal::Color::Spec(color) => {
+            gpui::rgb(u32::from(color.r) << 16 | u32::from(color.g) << 8 | u32::from(color.b))
+                .into()
+        }
+    }
+}
+
+#[derive(IntoElement)]
+struct StaticTerminalOutput(terminal::ParsedAnsiText);
+
+impl RenderOnce for StaticTerminalOutput {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let output = self.0;
+        let mut boundaries = vec![0, output.text.len()];
+        for (range, _) in output
+            .foreground_spans
+            .iter()
+            .chain(&output.background_spans)
+        {
+            boundaries.extend([range.start, range.end]);
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        let runs = boundaries
+            .windows(2)
+            .filter_map(|bounds| {
+                let [start, end] = bounds else {
+                    return None;
+                };
+                if start == end {
+                    return None;
+                }
+                let mut style = window.text_style();
+                style.color = output
+                    .foreground_spans
+                    .iter()
+                    .find(|(range, _)| range.contains(start))
+                    .and_then(|(_, color)| *color)
+                    .map(|color| terminal_color(color, cx))
+                    .unwrap_or(cx.theme().colors().terminal_foreground);
+                style.background_color = output
+                    .background_spans
+                    .iter()
+                    .find(|(range, _)| range.contains(start))
+                    .and_then(|(_, color)| *color)
+                    .map(|color| terminal_color(color, cx));
+                Some(style.to_run(end - start))
+            })
+            .collect::<Vec<_>>();
+        StyledText::new(output.text).with_runs(runs)
+    }
 }
 
 #[derive(Default)]
@@ -7483,9 +7710,9 @@ impl ThreadView {
                                         .into_any_element(),
                                     Color::Default,
                                     if created_at.is_some() {
-                                        px(28.)
+                                        px(40.)
                                     } else {
-                                        px(7.)
+                                        px(15.)
                                     },
                                 ),
                                 AssistantMessageChunk::Thought { block, .. } => (
@@ -7497,7 +7724,7 @@ impl ThreadView {
                                         cx,
                                     ),
                                     Color::Muted,
-                                    px(6.),
+                                    px(14.),
                                 ),
                             };
                             div()
@@ -7505,7 +7732,7 @@ impl ThreadView {
                                 .child(render_timeline_activity(
                                     format!("timeline-dot-assistant-{entry_ix}-{chunk_index}")
                                         .into(),
-                                    div().pb_2().child(content),
+                                    div().pt_2().pb_4().child(content),
                                     color,
                                     px(0.),
                                     dot_top,
@@ -7549,12 +7776,13 @@ impl ThreadView {
                 if timeline_activity_visibility(entry, cx).is_none() {
                     return Empty.into_any();
                 }
-                let command_failed = tool_call.terminals().any(|terminal| {
-                    terminal
-                        .read(cx)
-                        .output()
-                        .is_some_and(|output| terminal_exit_failed(&output.exit_status))
-                });
+                let command_failed = shell_result_failed(tool_call)
+                    || tool_call.terminals().any(|terminal| {
+                        terminal
+                            .read(cx)
+                            .output()
+                            .is_some_and(|output| terminal_exit_failed(&output.exit_status))
+                    });
                 let color = tool_timeline_color(tool_call.status(), command_failed);
                 let is_card = tool_call.terminals().next().is_some()
                     || tool_call.status() == ToolCallStatus::WaitingForConfirmation
@@ -7569,8 +7797,26 @@ impl ThreadView {
                             .entry_view_state
                             .read(cx)
                             .is_tool_call_content_visible(tool_call));
-                let top_margin = if is_card { rems(0.375) } else { rems(0.25) };
-                let header_inset = if is_card {
+                let finished_shell = matches!(tool_call.kind(), acp_v2::ToolKind::Execute)
+                    && matches!(
+                        tool_call.status(),
+                        ToolCallStatus::Completed
+                            | ToolCallStatus::Failed
+                            | ToolCallStatus::Canceled
+                    )
+                    && tool_call.authorization_id().is_none()
+                    && (tool_call.terminals().any(|terminal| {
+                        let terminal = terminal.read(cx);
+                        terminal.output().is_some() && terminal.command_text(cx).is_some()
+                    }) || (tool_call.terminals().next().is_none()
+                        && shell_command(tool_call).is_some()
+                        && shell_text_output(tool_call, cx).is_some()));
+                let top_margin = if tool_call.is_subagent() {
+                    rems(0.375)
+                } else {
+                    rems(0.5)
+                };
+                let header_inset = if is_card && !finished_shell {
                     rems(0.125).to_pixels(window.rem_size()) + px(1.)
                 } else {
                     px(0.)
@@ -9060,24 +9306,15 @@ impl ThreadView {
 
     fn render_compact_terminal_result(
         &self,
-        entry_ix: usize,
-        terminal: &Entity<acp_thread::Terminal>,
         command: String,
         group: SharedString,
-        output: &str,
+        output: SharedString,
+        preview: terminal::ParsedAnsiText,
         cx: &Context<Self>,
     ) -> Div {
-        let (preview, more_lines) = terminal_output_preview(output);
+        let more_lines = output.lines().nth(4).is_some();
         let background = cx.theme().colors().editor_background;
-        let output_terminal = terminal.clone();
-        let keyboard_terminal = terminal.clone();
-        // Render the live terminal for the output preview so it keeps its colors;
-        // the plain-text `content` string carries none.
-        let preview_terminal = self
-            .entry_view_state
-            .read(cx)
-            .entry(entry_ix)
-            .and_then(|entry| entry.terminal(terminal));
+        let keyboard_output = output.clone();
         v_flex()
             .border_1()
             .border_color(cx.theme().colors().border_variant)
@@ -9116,13 +9353,14 @@ impl ThreadView {
                             .min_w_0()
                             .max_h(rems_from_px(68_f32))
                             .overflow_hidden()
-                            .map(|this| match preview_terminal {
-                                Some(terminal_view) => this.child(terminal_view),
-                                None => this.child(if preview.is_empty() {
-                                    "No output".to_string()
-                                } else {
-                                    preview
-                                }),
+                            .debug_selector(|| "terminal-output-preview-text".into())
+                            .child(if preview.text.is_empty() {
+                                div().child("No output").into_any_element()
+                            } else {
+                                div()
+                                    .whitespace_nowrap()
+                                    .child(StaticTerminalOutput(preview))
+                                    .into_any_element()
                             }),
                     )
                     .when(more_lines, |this| {
@@ -9135,15 +9373,12 @@ impl ThreadView {
                         ))
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        let output = output_terminal.read(cx).inner().read(cx).get_content();
-                        this.open_terminal_output(output, window, cx);
+                        this.open_terminal_output(output.to_string(), window, cx);
                     }))
                     .on_key_down(cx.listener(
                         move |this, event: &gpui::KeyDownEvent, window, cx| {
                             if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                let output =
-                                    keyboard_terminal.read(cx).inner().read(cx).get_content();
-                                this.open_terminal_output(output, window, cx);
+                                this.open_terminal_output(keyboard_output.to_string(), window, cx);
                                 cx.stop_propagation();
                             }
                         },
@@ -9211,14 +9446,16 @@ impl ThreadView {
             .flatten();
         let compact = compact_command.is_some();
         let command_element = match (compact_command, output) {
-            (Some(command), Some(output)) => self.render_compact_terminal_result(
-                entry_ix,
-                terminal,
-                command,
-                header_group.clone(),
-                &output.content,
-                cx,
-            ),
+            (Some(command), Some(_)) => {
+                let retained = terminal_data.inner().read(cx);
+                self.render_compact_terminal_result(
+                    command,
+                    header_group.clone(),
+                    retained.get_content().into(),
+                    truncate_styled_output(retained.styled_content_preview(4)),
+                    cx,
+                )
+            }
             _ => self.render_collapsible_command(
                 header_group.clone(),
                 false,
@@ -9261,12 +9498,13 @@ impl ThreadView {
             is_expanded,
         )
         .when(compact, |header| {
-            header.title(
-                tool_call
-                    .tool_name
-                    .clone()
-                    .unwrap_or_else(|| "Terminal".into()),
-            )
+            header
+                .title(tool_heading_name(tool_call).unwrap_or("Terminal"))
+                .heading_height(window.line_height() - px(2.))
+                .when_some(
+                    tool_heading_description(tool_call),
+                    |header, description| header.description(description),
+                )
         })
         .elapsed(time_elapsed)
         .running(!command_finished && !needs_confirmation)
@@ -9312,7 +9550,7 @@ impl ThreadView {
 
         v_flex()
             .when(layout == ToolCallLayout::Standalone, |this| {
-                this.my_1p5()
+                this.my_2()
                     .mx_5()
                     .when(!compact, |this| this.border_1())
                     .when(tool_failed || command_failed, |card| card.border_dashed())
@@ -9439,6 +9677,81 @@ impl ThreadView {
             })
     }
 
+    fn render_finished_shell_tool(
+        &self,
+        tool_call: &ToolCall,
+        layout: ToolCallLayout,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Option<Div> {
+        if !matches!(tool_call.kind(), acp_v2::ToolKind::Execute)
+            || !matches!(
+                tool_call.status(),
+                ToolCallStatus::Completed | ToolCallStatus::Failed | ToolCallStatus::Canceled
+            )
+            || tool_call.authorization_id().is_some()
+        {
+            return None;
+        }
+        let command = shell_command(tool_call)?.to_owned();
+        let output = shell_text_output(tool_call, cx)?;
+        let parsed = terminal::parse_ansi_text(output.as_bytes());
+        let output = SharedString::from(parsed.text.clone());
+        let group = SharedString::from(format!("shell-result-{}", tool_call.id));
+        let working_dir = tool_call
+            .raw_input
+            .as_ref()
+            .and_then(|input| input.get("cwd").or_else(|| input.get("cd")))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("current directory");
+        let exit_code = tool_call
+            .raw_output
+            .as_ref()
+            .and_then(|output| output.get("exit_code").or_else(|| output.get("exitCode")))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|code| u32::try_from(code).ok());
+        let failed = shell_result_failed(tool_call)
+            || matches!(
+                tool_call.status(),
+                ToolCallStatus::Failed | ToolCallStatus::Rejected | ToolCallStatus::Canceled
+            );
+        let header =
+            TerminalToolHeader::new(tool_call.id.to_string(), group.clone(), working_dir, false)
+                .title(tool_heading_name(tool_call).unwrap_or("Terminal"))
+                .heading_height(window.line_height() - px(2.))
+                .when_some(
+                    tool_heading_description(tool_call),
+                    |header, description| header.description(description),
+                )
+                .when(failed, |header| header.failed(exit_code))
+                .when(
+                    tool_call
+                        .raw_output
+                        .as_ref()
+                        .and_then(|output| output.get("truncated"))
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true),
+                    |header| header.truncated("Only the retained output is available"),
+                )
+                .when_some(tool_call.sandbox_not_applied.as_ref(), |header, reason| {
+                    header.sandbox_warning(self.sandbox_not_applied_warning(reason, cx))
+                })
+                .command_slot(self.render_compact_terminal_result(
+                    command,
+                    group,
+                    output,
+                    truncate_styled_output(parsed),
+                    cx,
+                ));
+        Some(
+            v_flex()
+                .when(layout == ToolCallLayout::Standalone, |this| {
+                    this.mx_5().my_2()
+                })
+                .child(header),
+        )
+    }
+
     fn render_any_tool_call(
         &self,
         active_session_id: &acp_v2::SessionId,
@@ -9492,6 +9805,10 @@ impl ThreadView {
                         cx,
                     )
                 }))
+            } else if let Some(result) =
+                self.render_finished_shell_tool(tool_call, layout, window, cx)
+            {
+                this.child(result)
             } else {
                 this.child(self.render_tool_call(
                     active_session_id,
@@ -9981,7 +10298,7 @@ impl ThreadView {
                 if matches!(layout, ToolCallLayout::Embedded | ToolCallLayout::Floating) {
                     this
                 } else if use_card_layout {
-                    this.my_1p5()
+                    this.my_2()
                         .rounded_md()
                         .border_1()
                         .when(failed_or_canceled, |this| this.border_dashed())
@@ -9989,7 +10306,7 @@ impl ThreadView {
                         .bg(cx.theme().colors().editor_background)
                         .overflow_hidden()
                 } else {
-                    this.my_1()
+                    this.my_2()
                 }
             })
             .when(layout == ToolCallLayout::Standalone, |this| {
@@ -11341,155 +11658,107 @@ impl ThreadView {
         window: &Window,
         cx: &Context<Self>,
     ) -> Div {
-        let has_location = tool_call.locations.len() == 1;
-        let is_file = matches!(tool_call.kind(), acp_v2::ToolKind::Edit) && has_location;
-        let is_subagent_tool_call = tool_call.is_subagent();
-
-        let file_icon = if has_location {
-            FileIcons::get_icon(&tool_call.locations[0].path, cx)
-                .map(|from_path| Icon::from_path(from_path).color(Color::Muted))
-                .unwrap_or(Icon::new(IconName::ToolPencil).color(Color::Muted))
-        } else {
-            Icon::new(IconName::ToolPencil).color(Color::Muted)
-        };
-
-        let interrupted_edit = is_file && has_failed && has_revealed_diff;
-        let tool_icon = if interrupted_edit {
-            div()
-                .child(DecoratedIcon::new(
-                    file_icon,
-                    Some(
-                        IconDecoration::new(
-                            IconDecorationKind::Triangle,
-                            self.tool_card_header_bg(cx),
-                            cx,
-                        )
-                        .color(cx.theme().status().warning)
-                        .position(gpui::Point {
-                            x: px(-2.),
-                            y: px(-2.),
-                        }),
-                    ),
-                ))
-                .into_any_element()
-        } else if is_file {
-            div().child(file_icon).into_any_element()
-        } else if is_subagent_tool_call {
-            Icon::new(self.agent_icon)
-                .size(IconSize::Small)
-                .color(Color::Muted)
-                .into_any_element()
-        } else {
-            Icon::new(match tool_call.kind() {
-                acp_v2::ToolKind::Read => IconName::ToolSearch,
-                acp_v2::ToolKind::Edit => IconName::ToolPencil,
-                acp_v2::ToolKind::Delete => IconName::ToolDeleteFile,
-                acp_v2::ToolKind::Move => IconName::ArrowRightLeft,
-                acp_v2::ToolKind::Search => IconName::ToolSearch,
-                acp_v2::ToolKind::Execute => IconName::ToolTerminal,
-                acp_v2::ToolKind::Think => IconName::ToolThink,
-                acp_v2::ToolKind::Fetch => IconName::ToolWeb,
-                acp_v2::ToolKind::SwitchMode => IconName::ArrowRightLeft,
-                _ => IconName::ToolHammer,
-            })
-            .size(IconSize::Small)
-            .color(Color::Muted)
-            .into_any_element()
-        };
-
-        let gradient_overlay = {
-            div()
-                .absolute()
-                .top_0()
-                .right_0()
-                .w_12()
-                .h_full()
-                .map(|this| {
-                    if use_card_layout {
-                        this.bg(linear_gradient(
-                            90.,
-                            linear_color_stop(self.tool_card_header_bg(cx), 1.),
-                            linear_color_stop(self.tool_card_header_bg(cx).opacity(0.2), 0.),
-                        ))
-                    } else {
-                        this.bg(linear_gradient(
-                            90.,
-                            linear_color_stop(cx.theme().colors().panel_background, 1.),
-                            linear_color_stop(
-                                cx.theme().colors().panel_background.opacity(0.2),
-                                0.,
-                            ),
-                        ))
-                    }
-                })
-        };
-
-        h_flex()
+        let interrupted_edit = is_edit && has_failed && has_revealed_diff;
+        let mut row = h_flex()
             .debug_selector(move || format!("tool-call-label-{entry_ix}"))
             .relative()
             .w_full()
+            .min_w_0()
             .h(window.line_height() - px(2.))
             .text_size(self.tool_name_font_size())
-            .gap_1p5()
-            .when(has_location || use_card_layout, |this| this.px_1())
-            .when(has_location, |this| {
-                this.cursor(CursorStyle::PointingHand)
-                    .rounded(rems_from_px(3_f32)) // Concentric border radius
-                    .hover(|s| s.bg(cx.theme().colors().element_hover.opacity(0.5)))
-            })
-            .overflow_hidden()
-            .child(
-                div()
-                    .id(("tool-call-icon", entry_ix))
-                    .debug_selector(move || format!("tool-call-icon-{entry_ix}"))
-                    .flex_none()
-                    .when_some(
-                        Self::tool_call_icon_tooltip(
-                            tool_call.tool_name.as_ref(),
-                            interrupted_edit,
-                        ),
-                        |this, tooltip| this.tooltip(Tooltip::text(tooltip)),
-                    )
-                    .child(tool_icon),
-            )
-            .child(if has_location {
+            .gap_2()
+            .when(use_card_layout, |this| this.px_1())
+            .overflow_hidden();
+
+        let Some(name) = tool_heading_name(tool_call) else {
+            return row.child(self.render_markdown(
+                tool_call.label.clone(),
+                MarkdownStyle::themed(MarkdownFont::Agent, window, cx).with_muted_text(cx),
+                cx,
+            ));
+        };
+        row = row.child(
+            div()
+                .id(("tool-call-name", entry_ix))
+                .debug_selector(move || format!("tool-call-name-{entry_ix}"))
+                .flex_none()
+                .when_some(
+                    Self::tool_call_icon_tooltip(tool_call.tool_name.as_ref(), interrupted_edit),
+                    |this, tooltip| this.tooltip(Tooltip::text(tooltip)),
+                )
+                .child(
+                    Label::new(name)
+                        .size(LabelSize::Custom(self.tool_name_font_size()))
+                        .weight(gpui::FontWeight::BOLD)
+                        .color(Color::Default),
+                ),
+        );
+        if interrupted_edit {
+            row = row.child(
+                Icon::new(IconName::Warning)
+                    .size(IconSize::Small)
+                    .color(Color::Warning),
+            );
+        }
+        if let Some((path, line, location)) = tool_file_target(tool_call) {
+            let path_style = self.thread.read(cx).project().read(cx).path_style(cx);
+            let file_name = tool_file_name(&path, path_style).to_owned();
+            let tooltip = path.clone();
+            let end_line = tool_call
+                .raw_input
+                .as_ref()
+                .and_then(|input| input.get("end_line"))
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|line| u32::try_from(line).ok());
+            row = row.child(
                 h_flex()
                     .id(("open-tool-call-location", entry_ix))
-                    .w_full()
-                    .map(|this| {
-                        if use_card_layout {
-                            this.text_color(cx.theme().colors().text)
-                        } else {
-                            this.text_color(cx.theme().colors().text_muted)
-                        }
-                    })
+                    .debug_selector(move || format!("tool-call-file-{entry_ix}"))
+                    .min_w_0()
+                    .flex_1()
+                    .gap_0p5()
+                    .cursor_pointer()
+                    .tooltip(Tooltip::text(tooltip))
                     .child(
-                        self.render_markdown(
-                            tool_call.label.clone(),
-                            MarkdownStyle {
-                                prevent_mouse_interaction: true,
-                                ..MarkdownStyle::themed(MarkdownFont::Agent, window, cx)
-                                    .with_muted_text(cx)
-                            },
-                            cx,
-                        ),
+                        Label::new(file_name)
+                            .buffer_font(cx)
+                            .size(LabelSize::Custom(self.tool_name_font_size()))
+                            .color(Color::Accent)
+                            .truncate(),
                     )
-                    .tooltip(Tooltip::text("Go to File"))
+                    .when_some(line, |this, line| {
+                        this.child(
+                            Label::new(match end_line.filter(|end| *end > line) {
+                                Some(end) => format!(":{line}–{end}"),
+                                None => format!(":{line}"),
+                            })
+                            .size(LabelSize::Custom(self.tool_name_font_size()))
+                            .color(Color::Muted),
+                        )
+                    })
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_tool_call_location(entry_ix, 0, window, cx);
-                    }))
-                    .into_any_element()
-            } else {
-                h_flex()
-                    .w_full()
-                    .child(self.render_markdown(
-                        tool_call.label.clone(),
-                        MarkdownStyle::themed(MarkdownFont::Agent, window, cx).with_muted_text(cx),
-                        cx,
-                    ))
-                    .into_any()
-            })
-            .when(!is_edit, |this| this.child(gradient_overlay))
+                        if let Some(location) = location {
+                            this.open_tool_call_location(entry_ix, location, window, cx);
+                        } else {
+                            let target = line
+                                .map(|line| format!("{path}#L{line}"))
+                                .unwrap_or_else(|| path.clone());
+                            open_link(target.into(), &this.workspace, window, cx);
+                        }
+                    })),
+            );
+        } else if let Some(description) = tool_heading_description(tool_call) {
+            row = row.child(
+                div().flex_1().min_w_0().child(
+                    Label::new(description)
+                        .render_code_spans()
+                        .size(LabelSize::Custom(self.tool_name_font_size()))
+                        .color(Color::Muted)
+                        .truncate(),
+                ),
+            );
+        }
+        row
     }
 
     fn open_tool_call_location(
@@ -14452,6 +14721,43 @@ mod tests {
     use std::sync::Once;
     use util::path;
     use workspace::MultiWorkspace;
+
+    #[test]
+    fn test_tool_file_name_respects_project_path_style() {
+        for (path, style, expected) in [
+            ("/project/first/main.rs", PathStyle::Unix, "main.rs"),
+            ("/project/second/main.rs", PathStyle::Unix, "main.rs"),
+            ("/project/雪 file.rs", PathStyle::Unix, "雪 file.rs"),
+            (r"C:\project\src\main.rs", PathStyle::Windows, "main.rs"),
+            (r"C:/project\src/main.rs", PathStyle::Windows, "main.rs"),
+            (r"/project/with\slash.rs", PathStyle::Unix, r"with\slash.rs"),
+        ] {
+            assert_eq!(tool_file_name(path, style), expected);
+        }
+    }
+
+    #[test]
+    fn test_shell_preview_clips_ansi_spans_at_utf8_line_boundaries() {
+        let preview = truncate_styled_output(terminal::parse_ansi_text(
+            "\x1b[31mé\n二\nthree\nfour\nfive\x1b[0m".as_bytes(),
+        ));
+        assert_eq!(preview.text, "é\n二\nthree\nfour");
+        assert!(
+            preview
+                .foreground_spans
+                .iter()
+                .any(|(_, color)| color.is_some())
+        );
+        for (range, _) in preview
+            .foreground_spans
+            .iter()
+            .chain(&preview.background_spans)
+        {
+            assert!(preview.text.is_char_boundary(range.start));
+            assert!(preview.text.is_char_boundary(range.end));
+            assert!(range.end <= preview.text.len());
+        }
+    }
 
     #[test]
     fn test_reported_activity_completion_status() {
