@@ -33,7 +33,7 @@ permissions:
 jobs:
   check_version_changed:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -73,7 +73,7 @@ jobs:
     if: |-
       (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions') &&
       (inputs.force-bump == true || needs.check_version_changed.outputs.version_changed == 'false')
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - id: generate-token
       name: steps::generate_token
@@ -90,11 +90,15 @@ jobs:
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       with:
         clean: false
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: extension_bump::install_bump_2_version
       run: pip install bump2version --break-system-packages
     - id: bump-version
@@ -167,7 +171,7 @@ jobs:
     needs:
     - check_version_changed
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions') && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check_version_changed.outputs.version_changed == 'true'
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - id: generate-token
       name: steps::generate_token
@@ -220,7 +224,7 @@ jobs:
     - check_version_changed
     - create_version_label
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - id: generate-token
       name: steps::generate_token

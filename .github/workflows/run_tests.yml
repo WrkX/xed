@@ -19,7 +19,7 @@ permissions:
 jobs:
   orchestrate:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - name: steps::harden_runner
       uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
@@ -141,7 +141,7 @@ jobs:
       changed_extensions: ${{ steps.filter.outputs.changed_extensions }}
   check_style:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: namespace-profile-4x8-ubuntu-2204
+    runs-on: ubuntu-latest
     steps:
     - name: steps::harden_runner
       uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
@@ -151,11 +151,15 @@ jobs:
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       with:
         clean: false
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_pnpm
       uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
       with:
@@ -191,7 +195,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true' && github.event_name != 'merge_group'
-    runs-on: self-32vcpu-windows-2022
+    runs-on: windows-latest
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -222,7 +226,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true'
-    runs-on: namespace-profile-16x32-ubuntu-2204
+    runs-on: ubuntu-latest
     env:
       CC: clang
       CXX: clang++
@@ -239,11 +243,15 @@ jobs:
       run: |
         mkdir -p ./../.cargo
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_linux
       run: ./script/linux
     - name: steps::download_wasi_sdk
@@ -265,7 +273,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true' && github.event_name != 'merge_group'
-    runs-on: namespace-profile-mac-small
+    runs-on: macos-latest
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -275,11 +283,15 @@ jobs:
       run: |
         mkdir -p ./../.cargo
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_sccache
       run: ./script/setup-sccache
       env:
@@ -299,7 +311,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true' && github.event_name != 'merge_group'
-    runs-on: namespace-profile-mac-small
+    runs-on: macos-latest
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -309,11 +321,15 @@ jobs:
       run: |
         mkdir -p ./../.cargo
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::install_rustup_target
       run: rustup target add x86_64-apple-darwin
     - name: steps::setup_sccache
@@ -333,7 +349,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true' && github.event_name != 'merge_group'
-    runs-on: self-32vcpu-windows-2022
+    runs-on: windows-latest
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -378,7 +394,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true' && github.event_name != 'merge_group'
-    runs-on: namespace-profile-16x32-ubuntu-2204
+    runs-on: ubuntu-latest
     env:
       CC: clang
       CXX: clang++
@@ -395,11 +411,15 @@ jobs:
       run: |
         mkdir -p ./../.cargo
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_linux
       run: ./script/linux
     - name: steps::setup_node
@@ -445,7 +465,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true' && github.event_name != 'merge_group'
-    runs-on: namespace-profile-mac-large
+    runs-on: macos-latest
     env:
       RUST_LIB_BACKTRACE: '0'
     steps:
@@ -459,11 +479,15 @@ jobs:
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
     - name: steps::install_cmake
       run: command -v cmake >/dev/null 2>&1 || ./script/install-cmake
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_node
       uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
       with:
@@ -499,7 +523,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true' && github.event_name != 'merge_group'
-    runs-on: namespace-profile-4x8-ubuntu-2204
+    runs-on: ubuntu-latest
     steps:
     - name: steps::harden_runner
       uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
@@ -513,11 +537,15 @@ jobs:
       run: |
         mkdir -p ./../.cargo
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: run_tests::miri_scheduler::install_miri
       run: rustup toolchain install nightly-2026-09-09 --profile minimal --component miri --component rust-src
     - name: run_tests::miri_scheduler::clean_miri
@@ -534,7 +562,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true' && github.event_name != 'merge_group'
-    runs-on: namespace-profile-16x32-ubuntu-2204
+    runs-on: ubuntu-latest
     env:
       CC: clang
       CXX: clang++
@@ -547,11 +575,15 @@ jobs:
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       with:
         clean: false
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_linux
       run: ./script/linux
     - name: steps::download_wasi_sdk
@@ -583,7 +615,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true' && github.event_name != 'merge_group'
-    runs-on: namespace-profile-8x16-ubuntu-2204
+    runs-on: ubuntu-latest
     env:
       CC: clang
       CXX: clang++
@@ -600,11 +632,15 @@ jobs:
       run: |
         mkdir -p ./../.cargo
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_linux
       run: ./script/linux
     - name: steps::download_wasi_sdk
@@ -632,7 +668,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true' && github.event_name != 'merge_group'
-    runs-on: namespace-profile-8x16-ubuntu-2204
+    runs-on: ubuntu-latest
     steps:
     - name: steps::harden_runner
       uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
@@ -646,11 +682,15 @@ jobs:
       run: |
         mkdir -p ./../.cargo
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: run_tests::check_wasm::install_nightly_wasm_toolchain
       run: rustup toolchain install nightly --component rust-src --target wasm32-unknown-unknown
     - name: steps::setup_sccache
@@ -677,7 +717,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true'
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     env:
       CC: clang
       CXX: clang++
@@ -690,11 +730,15 @@ jobs:
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       with:
         clean: false
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: run_tests::check_dependencies::install_cargo_shear
       uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9
       with:
@@ -716,7 +760,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_docs == 'true' && github.event_name != 'merge_group'
-    runs-on: namespace-profile-16x32-ubuntu-2204
+    runs-on: ubuntu-latest
     env:
       DOCS_AMPLITUDE_API_KEY: ${{ secrets.DOCS_AMPLITUDE_API_KEY }}
       DOCS_CONSENT_IO_INSTANCE: ${{ secrets.DOCS_CONSENT_IO_INSTANCE }}
@@ -735,11 +779,15 @@ jobs:
       run: |
         mkdir -p ./../.cargo
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_linux
       run: ./script/linux
     - name: steps::download_wasi_sdk
@@ -775,7 +823,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_licenses == 'true' && github.event_name != 'merge_group'
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - name: steps::harden_runner
       uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
@@ -785,11 +833,15 @@ jobs:
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       with:
         clean: false
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: ./script/check-licenses
       run: ./script/check-licenses
     - name: ./script/generate-licenses
@@ -799,7 +851,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_action_checks == 'true'
-    runs-on: namespace-profile-8x16-ubuntu-2204
+    runs-on: ubuntu-latest
     steps:
     - name: steps::harden_runner
       uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
@@ -811,11 +863,15 @@ jobs:
         clean: false
     - name: run_tests::check_scripts::run_shellcheck
       run: ./script/shellcheck-scripts error
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: run_tests::check_scripts::check_xtask_workflows
       run: |
         cargo xtask workflows
@@ -843,7 +899,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true'
-    runs-on: namespace-profile-8x16-ubuntu-2204
+    runs-on: ubuntu-latest
     env:
       CC: clang
       CXX: clang++
@@ -858,11 +914,15 @@ jobs:
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       with:
         clean: false
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_linux
       run: ./script/linux
     - name: run_tests::check_remote_server
@@ -884,17 +944,21 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true' && github.event_name != 'merge_group'
-    runs-on: namespace-profile-mac-small
+    runs-on: macos-latest
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       with:
         clean: false
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: run_tests::check_remote_server
       run: rustup target add aarch64-apple-darwin
     - name: steps::setup_sccache
@@ -914,7 +978,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true' && github.event_name != 'merge_group'
-    runs-on: self-32vcpu-windows-2022
+    runs-on: windows-latest
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -952,7 +1016,7 @@ jobs:
     - orchestrate
     - check_style
     if: needs.orchestrate.outputs.run_tests == 'true'
-    runs-on: namespace-profile-4x8-ubuntu-2204
+    runs-on: ubuntu-latest
     env:
       GIT_AUTHOR_NAME: Protobuf Action
       GIT_AUTHOR_EMAIL: ci@zed.dev
@@ -1032,7 +1096,7 @@ jobs:
     - check_remote_server_windows_x86_64
     - extension_tests
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions') && always()
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - name: run_tests::tests_pass
       run: |

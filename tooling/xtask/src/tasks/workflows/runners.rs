@@ -1,21 +1,26 @@
-pub const DANGERBOT: Runner = Runner("namespace-profile-dangerbot");
+// Upstream Zed targets Namespace Cloud (`namespace-profile-*`) and self-hosted
+// (`self-*`) runners. Those don't exist on this fork, so jobs assigned to them
+// queue forever waiting for a runner that never appears. Run everything on
+// GitHub-hosted runners instead.
+pub const DANGERBOT: Runner = Runner("ubuntu-latest");
 
-pub const LINUX_SMALL: Runner = Runner("namespace-profile-2x4-ubuntu-2404");
+pub const LINUX_SMALL: Runner = Runner("ubuntu-latest");
 pub const LINUX_DEFAULT: Runner = LINUX_XL;
-pub const LINUX_XL: Runner = Runner("namespace-profile-16x32-ubuntu-2204");
-pub const LINUX_LARGE: Runner = Runner("namespace-profile-8x16-ubuntu-2204");
-pub const LINUX_MEDIUM: Runner = Runner("namespace-profile-4x8-ubuntu-2204");
+pub const LINUX_XL: Runner = Runner("ubuntu-latest");
+pub const LINUX_LARGE: Runner = Runner("ubuntu-latest");
+pub const LINUX_MEDIUM: Runner = Runner("ubuntu-latest");
 
-// Using Ubuntu 20.04 for minimal glibc version
-pub const LINUX_X86_BUNDLER: Runner = Runner("namespace-profile-32x64-ubuntu-2004");
-pub const LINUX_ARM_BUNDLER: Runner = Runner("namespace-profile-8x32-ubuntu-2004-arm-m4");
+pub const LINUX_X86_BUNDLER: Runner = Runner("ubuntu-latest");
+// `bundle-linux` cross-compiles nothing: it builds for the host architecture
+// and names the archive after `uname -m`, so the aarch64 bundle must run on an
+// arm64 runner to produce an aarch64 artifact.
+pub const LINUX_ARM_BUNDLER: Runner = Runner("ubuntu-24.04-arm");
 
-// Larger Ubuntu runner with glibc 2.39 for extension bundling
-pub const LINUX_LARGE_RAM: Runner = Runner("namespace-profile-8x32-ubuntu-2404");
+pub const LINUX_LARGE_RAM: Runner = Runner("ubuntu-latest");
 
-pub const MAC_DEFAULT: Runner = Runner("namespace-profile-mac-large");
-pub const MAC_SMALL: Runner = Runner("namespace-profile-mac-small");
-pub const WINDOWS_DEFAULT: Runner = Runner("self-32vcpu-windows-2022");
+pub const MAC_DEFAULT: Runner = Runner("macos-latest");
+pub const MAC_SMALL: Runner = Runner("macos-latest");
+pub const WINDOWS_DEFAULT: Runner = Runner("windows-latest");
 
 pub struct Runner(&'static str);
 

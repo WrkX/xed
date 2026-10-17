@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::tasks::workflows::{
     steps::{
-        CommonJobConditions, CommonPermissionSets, cache_rust_dependencies_namespace,
+        CommonJobConditions, CommonPermissionSets, cache_rust_dependencies,
         repository_owner_guard_expression, use_clang,
     },
     vars::{self, PathCondition},
@@ -450,7 +450,7 @@ fn check_style() -> NamedJob {
             .runs_on(runners::LINUX_MEDIUM)
             .add_step(steps::harden_runner())
             .add_step(steps::checkout_repo())
-            .add_step(steps::cache_rust_dependencies_namespace())
+            .add_step(steps::cache_rust_dependencies())
             .add_step(steps::setup_pnpm())
             .add_step(steps::prettier())
             .add_step(steps::cargo_fmt())
@@ -494,7 +494,7 @@ fn check_dependencies() -> NamedJob {
             .runs_on(runners::LINUX_SMALL)
             .add_step(steps::harden_runner())
             .add_step(steps::checkout_repo())
-            .add_step(steps::cache_rust_dependencies_namespace())
+            .add_step(steps::cache_rust_dependencies())
             .add_step(install_cargo_shear())
             .add_step(run_cargo_shear())
             .add_step(check_cargo_lock())
@@ -528,7 +528,7 @@ fn check_wasm() -> NamedJob {
             .add_step(steps::harden_runner())
             .add_step(steps::checkout_repo())
             .add_step(steps::setup_cargo_config(Platform::Linux))
-            .add_step(steps::cache_rust_dependencies_namespace())
+            .add_step(steps::cache_rust_dependencies())
             .add_step(install_nightly_wasm_toolchain())
             .add_step(steps::setup_sccache(Platform::Linux))
             .add_step(cargo_check_wasm())
@@ -586,7 +586,7 @@ fn check_remote_server(platform: Platform, arch: Arch) -> NamedJob {
             })
             .add_step(steps::checkout_repo())
             .when(platform != Platform::Windows, |job| {
-                job.add_step(steps::cache_rust_dependencies_namespace())
+                job.add_step(steps::cache_rust_dependencies())
             })
             .when(platform == Platform::Linux, |job| {
                 job.add_step(steps::setup_linux())
@@ -605,7 +605,7 @@ fn check_workspace_binaries() -> NamedJob {
             .add_step(steps::harden_runner())
             .add_step(steps::checkout_repo())
             .add_step(steps::setup_cargo_config(Platform::Linux))
-            .add_step(steps::cache_rust_dependencies_namespace())
+            .add_step(steps::cache_rust_dependencies())
             .map(steps::install_linux_dependencies)
             .add_step(steps::setup_sccache(Platform::Linux))
             .add_step(steps::script("cargo build -p collab"))
@@ -636,7 +636,7 @@ pub(crate) fn clippy(platform: Platform, arch: Option<Arch>, harden: bool) -> Na
         .add_step(steps::setup_cargo_config(platform))
         .when(
             platform == Platform::Linux || platform == Platform::Mac,
-            |this| this.add_step(steps::cache_rust_dependencies_namespace()),
+            |this| this.add_step(steps::cache_rust_dependencies()),
         )
         .when(
             platform == Platform::Linux,
@@ -706,10 +706,10 @@ fn run_platform_tests_impl(platform: Platform, filter_packages: bool, harden: bo
                 job.add_step(steps::install_cmake())
             })
             .when(platform == Platform::Mac, |this| {
-                this.add_step(steps::cache_rust_dependencies_namespace())
+                this.add_step(steps::cache_rust_dependencies())
             })
             .when(platform == Platform::Linux, |this| {
-                use_clang(this.add_step(steps::cache_rust_dependencies_namespace()))
+                use_clang(this.add_step(steps::cache_rust_dependencies()))
             })
             .when(platform == Platform::Linux, |job| {
                 job.add_step(steps::setup_linux())
@@ -820,7 +820,7 @@ fn miri_scheduler() -> NamedJob {
             .add_step(steps::harden_runner())
             .add_step(steps::checkout_repo())
             .add_step(steps::setup_cargo_config(Platform::Linux))
-            .add_step(steps::cache_rust_dependencies_namespace())
+            .add_step(steps::cache_rust_dependencies())
             .add_step(install_miri())
             .add_step(clean_miri())
             .add_step(run_scheduler_tests_under_miri())
@@ -841,7 +841,7 @@ fn doctests() -> NamedJob {
             .runs_on(runners::LINUX_DEFAULT)
             .add_step(steps::harden_runner())
             .add_step(steps::checkout_repo())
-            .add_step(steps::cache_rust_dependencies_namespace())
+            .add_step(steps::cache_rust_dependencies())
             .map(steps::install_linux_dependencies)
             .add_step(steps::setup_cargo_config(Platform::Linux))
             .add_step(steps::setup_sccache(Platform::Linux))
@@ -857,7 +857,7 @@ fn check_licenses() -> NamedJob {
             .runs_on(runners::LINUX_SMALL)
             .add_step(steps::harden_runner())
             .add_step(steps::checkout_repo())
-            .add_step(steps::cache_rust_dependencies_namespace())
+            .add_step(steps::cache_rust_dependencies())
             .add_step(steps::script("./script/check-licenses"))
             .add_step(steps::script("./script/generate-licenses")),
     )
@@ -909,7 +909,7 @@ pub(crate) fn check_scripts(harden: bool) -> NamedJob {
             .when(harden, |this| this.add_step(steps::harden_runner()))
             .add_step(steps::checkout_repo())
             .add_step(run_shellcheck())
-            .add_step(cache_rust_dependencies_namespace())
+            .add_step(cache_rust_dependencies())
             .add_step(check_xtask_workflows())
             .add_step(download_actionlint().id("get_actionlint"))
             .add_step(run_actionlint())

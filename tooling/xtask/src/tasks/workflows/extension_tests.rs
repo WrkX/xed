@@ -9,7 +9,7 @@ use crate::tasks::workflows::{
     runners,
     steps::{
         self, BASH_SHELL, CommonJobConditions, CommonPermissionSets, FluentBuilder, NamedJob,
-        cache_rust_dependencies_namespace, named,
+        cache_rust_dependencies, named,
     },
     vars::{PathCondition, StepOutput, WorkflowInput, one_workflow_per_non_main_branch_and_token},
 };
@@ -123,7 +123,7 @@ fn check_rust() -> NamedJob {
         .runs_on(runners::LINUX_LARGE_RAM)
         .timeout_minutes(6u32)
         .add_step(steps::checkout_repo())
-        .add_step(steps::cache_rust_dependencies_namespace())
+        .add_step(steps::cache_rust_dependencies())
         .add_step(install_rust_target())
         .add_step(get_package)
         .add_step(cargo_fmt_package(&package_name))
@@ -146,7 +146,7 @@ pub(crate) fn check_extension() -> NamedJob {
         .add_step(steps::checkout_repo().with_full_history())
         .add_step(cache_download)
         .add_step(download_zed_extension_cli(cache_hit))
-        .add_step(cache_rust_dependencies_namespace()) // Extensions can compile Rust, so provide the cache if needed.
+        .add_step(cache_rust_dependencies()) // Extensions can compile Rust, so provide the cache if needed.
         .add_step(check())
         .add_step(fetch_ts_query_ls())
         .add_step(run_ts_query_ls(RunContext::Extension))

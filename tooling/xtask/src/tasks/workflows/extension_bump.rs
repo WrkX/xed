@@ -7,7 +7,7 @@ use crate::tasks::workflows::{
     steps::{
         self, BASH_SHELL, CommonJobConditions, CommonPermissionSets,
         DEFAULT_REPOSITORY_OWNER_GUARD, GitHubScriptStep, GitRef, NamedJob, RefSha,
-        RepositoryTarget, TokenPermissions, cache_rust_dependencies_namespace, checkout_repo,
+        RepositoryTarget, TokenPermissions, cache_rust_dependencies, checkout_repo,
         create_ref, dependant_job, generate_token, named,
     },
     vars::{
@@ -240,7 +240,7 @@ fn bump_extension_version(
         .timeout_minutes(5u32)
         .add_step(generate_token)
         .add_step(steps::checkout_repo())
-        .add_step(cache_rust_dependencies_namespace())
+        .add_step(cache_rust_dependencies())
         .add_step(install_bump_2_version())
         .add_step(bump_version)
         .add_step(create_pull_request(

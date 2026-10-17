@@ -27,7 +27,7 @@ permissions:
 jobs:
   rebuild_releases_page:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - name: after_release::rebuild_releases_page::refresh_cloud_releases
       run: curl -fX POST "https://cloud.zed.dev/releases/refresh?expect_tag=$TAG_NAME"
@@ -52,7 +52,7 @@ jobs:
     needs:
     - rebuild_releases_page
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - id: get-release-url
       name: after_release::post_to_discord::get_release_url
@@ -80,7 +80,7 @@ jobs:
         webhook-url: ${{ secrets.DISCORD_WEBHOOK_RELEASE_NOTES }}
         content: ${{ steps.get-content.outputs.string }}
   publish_winget:
-    runs-on: self-32vcpu-windows-2022
+    runs-on: windows-latest
     steps:
     - name: after_release::publish_winget::sync_winget_pkgs_fork
       run: |
@@ -121,7 +121,7 @@ jobs:
         token: ${{ secrets.WINGET_TOKEN }}
   create_sentry_release:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -143,7 +143,7 @@ jobs:
     - create_sentry_release
     - deploy_docs
     if: failure()
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - name: release::send_slack_message
       run: 'curl -X POST -H ''Content-type: application/json'' --data "$(jq -n --arg text "$SLACK_MESSAGE" ''{"text": $text}'')" "$SLACK_WEBHOOK"'

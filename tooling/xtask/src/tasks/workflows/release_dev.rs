@@ -18,6 +18,10 @@ const DEV_RELEASE_TAG: &str = "dev";
 /// Builds the `dev` channel for Linux and Windows and attaches the resulting
 /// artifacts to a rolling GitHub prerelease. The workflow depends on no other
 /// workflow, so unrelated CI failures cannot block a dev build.
+///
+/// The publish job runs even if some (or all) of the bundles fail, so that
+/// whatever artifacts were produced still make it into the release. It refuses
+/// to create a release with no artifacts at all.
 pub fn release_dev() -> Workflow {
     let tag = WorkflowInput::string("tag", Some(DEV_RELEASE_TAG.to_string()))
         .description("Tag of the release to create or update. Assets are overwritten on re-run.");
@@ -56,6 +60,11 @@ pub fn release_dev() -> Workflow {
 fn publish_release(bundles: &[&NamedJob], tag: &WorkflowInput) -> NamedJob {
     fn create_or_update_release(tag: &WorkflowInput) -> Step<Run> {
         named::bash(indoc! {r#"
+            if ! compgen -G "./artifacts/*/*" > /dev/null; then
+                echo "No artifacts were produced; refusing to publish an empty release." >&2
+                exit 1
+            fi
+
             if gh release view "$TAG" >/dev/null 2>&1; then
                 echo "Release '$TAG' already exists; uploading assets."
             else
@@ -77,6 +86,7 @@ fn publish_release(bundles: &[&NamedJob], tag: &WorkflowInput) -> NamedJob {
     NamedJob {
         name: "publish_release".to_owned(),
         job: dependant_job(bundles)
+            .cond(Expression::new("!cancelled()"))
             .runs_on(runners::LINUX_SMALL)
             .permissions(Permissions::default().contents(Level::Write))
             .add_step(download_workflow_artifacts())

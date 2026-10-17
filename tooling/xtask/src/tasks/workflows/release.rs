@@ -325,7 +325,7 @@ fn compliance_check() -> (NamedJob, JobOutput) {
                 .with_full_history()
                 .with_ref(Context::github().ref_()),
         )
-        .add_step(steps::cache_rust_dependencies_namespace());
+        .add_step(steps::cache_rust_dependencies());
 
     let (compliance_job, check_result) =
         add_compliance_steps(job, ComplianceContext::ReleaseNonBlocking);
@@ -377,7 +377,7 @@ fn release_compliance_check(deps: &[&NamedJob], non_blocking_outcome: JobOutput)
                 .with_full_history()
                 .with_ref(Context::github().ref_()),
         )
-        .add_step(steps::cache_rust_dependencies_namespace());
+        .add_step(steps::cache_rust_dependencies());
 
     let (job, _) = add_compliance_steps(
         job,

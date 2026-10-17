@@ -47,7 +47,10 @@ pub fn run_bundling() -> Workflow {
 }
 
 fn bundle_job(deps: &[&NamedJob]) -> Job {
-    dependant_job(deps).timeout_minutes(60u32)
+    // GitHub-hosted runners have ~4 vCPUs, far fewer than the 32-core machines
+    // this workflow was originally tuned for, so a clean release build needs a
+    // much larger budget than the original 60 minutes.
+    dependant_job(deps).timeout_minutes(360u32)
 }
 
 /// Restricts the bundle jobs to runs that were explicitly requested by adding the
@@ -100,7 +103,7 @@ pub(crate) fn bundle_mac(
             .runs_on(runners::MAC_DEFAULT)
             .envs(bundle_envs(platform))
             .add_step(steps::checkout_repo())
-            .add_step(steps::cache_rust_dependencies_namespace())
+            .add_step(steps::cache_rust_dependencies())
             .when_some(release_channel, |job, release_channel| {
                 job.add_step(set_release_channel(platform, release_channel))
             })
@@ -194,7 +197,7 @@ pub(crate) fn bundle_linux(
             .add_env(Env::new("CXX", "clang++-18"))
             .add_env(Env::new("LLD", "/usr/bin/ld.lld-18"))
             .add_step(steps::checkout_repo())
-            .add_step(steps::cache_rust_dependencies_namespace())
+            .add_step(steps::cache_rust_dependencies())
             .when_some(release_channel, |job, release_channel| {
                 job.add_step(set_release_channel(platform, release_channel))
             })
@@ -238,6 +241,10 @@ pub(crate) fn bundle_windows(
         job: bundle_job(deps)
             .runs_on(runners::WINDOWS_DEFAULT)
             .envs(bundle_envs(platform))
+            // The bundle steps run with `working-directory: ${{ env.ZED_WORKSPACE }}`,
+            // which upstream's self-hosted Windows runners define as a machine-level
+            // variable. GitHub-hosted runners don't, so set it to the checkout dir.
+            .add_env(Env::new("ZED_WORKSPACE", "${{ github.workspace }}"))
             .add_step(steps::checkout_repo())
             .when_some(release_channel, |job, release_channel| {
                 job.add_step(set_release_channel(platform, release_channel))

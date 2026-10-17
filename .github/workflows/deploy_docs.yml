@@ -41,7 +41,7 @@ jobs:
   deploy_docs:
     if: github.repository_owner == 'zed-industries'
     name: Build and Deploy Docs
-    runs-on: namespace-profile-16x32-ubuntu-2204
+    runs-on: ubuntu-latest
     env:
       DOCS_AMPLITUDE_API_KEY: ${{ secrets.DOCS_AMPLITUDE_API_KEY }}
       DOCS_CONSENT_IO_INSTANCE: ${{ secrets.DOCS_CONSENT_IO_INSTANCE }}
@@ -95,11 +95,15 @@ jobs:
       run: |
         mkdir -p ./../.cargo
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_linux
       run: ./script/linux
     - name: steps::download_wasi_sdk

@@ -19,7 +19,7 @@ permissions:
 jobs:
   fetch_extension_repos:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions') && (github.ref == 'refs/tags/extension-workflows' || github.ref == 'refs/heads/main')
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - name: checkout_zed_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -84,11 +84,15 @@ jobs:
         result-encoding: json
       env:
         FILTER_REPOS: ${{ inputs.filter-repos }}
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: extension_workflow_rollout::fetch_extension_repos::generate_workflow_files
       run: |
         cargo xtask workflows "$COMMIT_SHA"
@@ -110,7 +114,7 @@ jobs:
     needs:
     - fetch_extension_repos
     if: needs.fetch_extension_repos.outputs.repos != '[]'
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         repo: ${{ fromJson(needs.fetch_extension_repos.outputs.repos) }}
@@ -210,7 +214,7 @@ jobs:
     needs:
     - rollout_workflows_to_extension
     if: inputs.filter-repos == ''
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - id: generate-token
       name: steps::generate_token

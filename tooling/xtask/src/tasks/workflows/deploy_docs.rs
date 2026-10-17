@@ -97,7 +97,7 @@ fn docs_build_steps(
             )
             .runs_on(runners::LINUX_XL)
             .add_step(steps::setup_cargo_config(runners::Platform::Linux))
-            .add_step(steps::cache_rust_dependencies_namespace())
+            .add_step(steps::cache_rust_dependencies())
             .map(steps::install_linux_dependencies)
             .add_step(steps::script("./script/generate-action-metadata"))
             .add_step(lychee_link_check("./docs/src/**/*"))

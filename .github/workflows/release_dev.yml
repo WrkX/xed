@@ -15,7 +15,7 @@ permissions:
   contents: read
 jobs:
   bundle_linux_x86_64:
-    runs-on: namespace-profile-32x64-ubuntu-2004
+    runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: 0
       ZED_CLIENT_CHECKSUM_SEED: ${{ secrets.ZED_CLIENT_CHECKSUM_SEED }}
@@ -28,11 +28,15 @@ jobs:
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       with:
         clean: false
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: run_bundling::set_release_channel_to_dev
       run: |
         set -eu
@@ -61,9 +65,9 @@ jobs:
         name: zed-remote-server-linux-x86_64.gz
         path: target/zed-remote-server-linux-x86_64.gz
         if-no-files-found: error
-    timeout-minutes: 60
+    timeout-minutes: 360
   bundle_linux_aarch64:
-    runs-on: namespace-profile-8x32-ubuntu-2004-arm-m4
+    runs-on: ubuntu-24.04-arm
     env:
       CARGO_INCREMENTAL: 0
       ZED_CLIENT_CHECKSUM_SEED: ${{ secrets.ZED_CLIENT_CHECKSUM_SEED }}
@@ -76,11 +80,15 @@ jobs:
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       with:
         clean: false
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: run_bundling::set_release_channel_to_dev
       run: |
         set -eu
@@ -109,9 +117,9 @@ jobs:
         name: zed-remote-server-linux-aarch64.gz
         path: target/zed-remote-server-linux-aarch64.gz
         if-no-files-found: error
-    timeout-minutes: 60
+    timeout-minutes: 360
   bundle_windows_x86_64:
-    runs-on: self-32vcpu-windows-2022
+    runs-on: windows-latest
     env:
       CARGO_INCREMENTAL: 0
       ZED_CLIENT_CHECKSUM_SEED: ${{ secrets.ZED_CLIENT_CHECKSUM_SEED }}
@@ -125,6 +133,7 @@ jobs:
       FILE_DIGEST: SHA256
       TIMESTAMP_DIGEST: SHA256
       TIMESTAMP_SERVER: http://timestamp.acs.microsoft.com
+      ZED_WORKSPACE: ${{ github.workspace }}
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -161,9 +170,9 @@ jobs:
         name: zed-remote-server-windows-x86_64.zip
         path: target/zed-remote-server-windows-x86_64.zip
         if-no-files-found: error
-    timeout-minutes: 60
+    timeout-minutes: 360
   bundle_windows_aarch64:
-    runs-on: self-32vcpu-windows-2022
+    runs-on: windows-latest
     env:
       CARGO_INCREMENTAL: 0
       ZED_CLIENT_CHECKSUM_SEED: ${{ secrets.ZED_CLIENT_CHECKSUM_SEED }}
@@ -177,6 +186,7 @@ jobs:
       FILE_DIGEST: SHA256
       TIMESTAMP_DIGEST: SHA256
       TIMESTAMP_SERVER: http://timestamp.acs.microsoft.com
+      ZED_WORKSPACE: ${{ github.workspace }}
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -213,14 +223,15 @@ jobs:
         name: zed-remote-server-windows-aarch64.zip
         path: target/zed-remote-server-windows-aarch64.zip
         if-no-files-found: error
-    timeout-minutes: 60
+    timeout-minutes: 360
   publish_release:
     needs:
     - bundle_linux_x86_64
     - bundle_linux_aarch64
     - bundle_windows_x86_64
     - bundle_windows_aarch64
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    if: '!cancelled()'
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
@@ -232,6 +243,11 @@ jobs:
       run: ls -lR ./artifacts
     - name: release_dev::publish_release::create_or_update_release
       run: |
+        if ! compgen -G "./artifacts/*/*" > /dev/null; then
+            echo "No artifacts were produced; refusing to publish an empty release." >&2
+            exit 1
+        fi
+
         if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release '$TAG' already exists; uploading assets."
         else

@@ -268,14 +268,19 @@ pub fn install_rustup_target(target: &str) -> Step<Run> {
     named::bash(format!("rustup target add {target}"))
 }
 
-pub fn cache_rust_dependencies_namespace() -> Step<Use> {
-    named::uses(
-        "namespacelabs",
-        "nscloud-cache-action",
-        "a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9", // v1
-    )
-    .add_with(("cache", "rust"))
-    .add_with(("path", "~/.rustup"))
+pub fn cache_rust_dependencies() -> Step<Use> {
+    named::uses("actions", "cache", CACHE_SHA)
+        .add_with(("path", "~/.cargo/registry\n~/.cargo/git\n~/.rustup"))
+        .add_with((
+            // `runner.arch` is part of the key because `~/.rustup` holds
+            // architecture-specific toolchains.
+            "key",
+            "${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}",
+        ))
+        .add_with((
+            "restore-keys",
+            "${{ runner.os }}-${{ runner.arch }}-cargo-",
+        ))
 }
 
 pub fn setup_sccache(platform: Platform) -> Step<Run> {
@@ -573,6 +578,7 @@ impl ZippyGitIdentity for Step<Run> {
 const GITHUB_SCRIPT_SHA: &str = "f28e40c7f34bde8b3046d885e986cb6290c5673b"; // v7
 const UPLOAD_ARTIFACT_SHA: &str = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"; // v7.0.1
 const DOWNLOAD_ARTIFACT_SHA: &str = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"; // v8.0.1
+const CACHE_SHA: &str = "0057852bfaa89a56745cba8c7296529d2fc39830"; // v4
 
 #[allow(unused)]
 pub(crate) enum ResultEncoding {

@@ -13,7 +13,7 @@ permissions:
 jobs:
   run_tests_mac:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: namespace-profile-mac-large
+    runs-on: macos-latest
     env:
       RUST_LIB_BACKTRACE: '0'
     steps:
@@ -27,11 +27,15 @@ jobs:
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
     - name: steps::install_cmake
       run: command -v cmake >/dev/null 2>&1 || ./script/install-cmake
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_node
       uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
       with:
@@ -64,7 +68,7 @@ jobs:
     timeout-minutes: 60
   run_tests_linux:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: namespace-profile-16x32-ubuntu-2204
+    runs-on: ubuntu-latest
     env:
       CC: clang
       CXX: clang++
@@ -77,11 +81,15 @@ jobs:
       run: |
         mkdir -p ./../.cargo
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_linux
       run: ./script/linux
     - name: steps::setup_node
@@ -124,7 +132,7 @@ jobs:
         options: --health-cmd pg_isready --health-interval 500ms --health-timeout 5s --health-retries 10
   run_tests_windows:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: self-32vcpu-windows-2022
+    runs-on: windows-latest
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -166,7 +174,7 @@ jobs:
     timeout-minutes: 60
   clippy_mac:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: namespace-profile-mac-small
+    runs-on: macos-latest
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -176,11 +184,15 @@ jobs:
       run: |
         mkdir -p ./../.cargo
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_sccache
       run: ./script/setup-sccache
       env:
@@ -197,7 +209,7 @@ jobs:
     timeout-minutes: 60
   clippy_linux:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: namespace-profile-16x32-ubuntu-2204
+    runs-on: ubuntu-latest
     env:
       CC: clang
       CXX: clang++
@@ -210,11 +222,15 @@ jobs:
       run: |
         mkdir -p ./../.cargo
         cp ./.cargo/ci-config.toml ./../.cargo/config.toml
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_linux
       run: ./script/linux
     - name: steps::download_wasi_sdk
@@ -233,7 +249,7 @@ jobs:
     timeout-minutes: 60
   clippy_windows:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: self-32vcpu-windows-2022
+    runs-on: windows-latest
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -261,7 +277,7 @@ jobs:
     timeout-minutes: 60
   check_scripts:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: namespace-profile-8x16-ubuntu-2204
+    runs-on: ubuntu-latest
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -269,11 +285,15 @@ jobs:
         clean: false
     - name: run_tests::check_scripts::run_shellcheck
       run: ./script/shellcheck-scripts error
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: run_tests::check_scripts::check_xtask_workflows
       run: |
         cargo xtask workflows
@@ -298,7 +318,7 @@ jobs:
     timeout-minutes: 60
   create_draft_release:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - id: generate-token
       name: steps::authenticate_as_zippy
@@ -328,7 +348,7 @@ jobs:
     timeout-minutes: 60
   compliance_check:
     if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -336,11 +356,15 @@ jobs:
         clean: false
         fetch-depth: 0
         ref: ${{ github.ref }}
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - id: run-compliance-check
       name: release::add_compliance_steps::run_compliance_check
       run: |
@@ -383,7 +407,7 @@ jobs:
     - run_tests_linux
     - clippy_linux
     - check_scripts
-    runs-on: namespace-profile-8x32-ubuntu-2004-arm-m4
+    runs-on: ubuntu-24.04-arm
     env:
       CARGO_INCREMENTAL: 0
       ZED_CLIENT_CHECKSUM_SEED: ${{ secrets.ZED_CLIENT_CHECKSUM_SEED }}
@@ -396,11 +420,15 @@ jobs:
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       with:
         clean: false
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_sentry
       uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b
       with:
@@ -423,13 +451,13 @@ jobs:
         name: zed-remote-server-linux-aarch64.gz
         path: target/zed-remote-server-linux-aarch64.gz
         if-no-files-found: error
-    timeout-minutes: 60
+    timeout-minutes: 360
   bundle_linux_x86_64:
     needs:
     - run_tests_linux
     - clippy_linux
     - check_scripts
-    runs-on: namespace-profile-32x64-ubuntu-2004
+    runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: 0
       ZED_CLIENT_CHECKSUM_SEED: ${{ secrets.ZED_CLIENT_CHECKSUM_SEED }}
@@ -442,11 +470,15 @@ jobs:
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       with:
         clean: false
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_sentry
       uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b
       with:
@@ -469,13 +501,13 @@ jobs:
         name: zed-remote-server-linux-x86_64.gz
         path: target/zed-remote-server-linux-x86_64.gz
         if-no-files-found: error
-    timeout-minutes: 60
+    timeout-minutes: 360
   build_static_bwrap_linux_aarch64:
     needs:
     - run_tests_linux
     - clippy_linux
     - check_scripts
-    runs-on: namespace-profile-8x32-ubuntu-2004-arm-m4
+    runs-on: ubuntu-24.04-arm
     steps:
     - name: steps::cache_nix_dependencies_namespace
       uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
@@ -510,7 +542,7 @@ jobs:
     - run_tests_linux
     - clippy_linux
     - check_scripts
-    runs-on: namespace-profile-32x64-ubuntu-2004
+    runs-on: ubuntu-latest
     steps:
     - name: steps::cache_nix_dependencies_namespace
       uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
@@ -545,7 +577,7 @@ jobs:
     - run_tests_mac
     - clippy_mac
     - check_scripts
-    runs-on: namespace-profile-mac-large
+    runs-on: macos-latest
     env:
       CARGO_INCREMENTAL: 0
       ZED_CLIENT_CHECKSUM_SEED: ${{ secrets.ZED_CLIENT_CHECKSUM_SEED }}
@@ -560,11 +592,15 @@ jobs:
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       with:
         clean: false
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_node
       uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
       with:
@@ -604,13 +640,13 @@ jobs:
         name: zed-remote-server-macos-aarch64.gz
         path: target/zed-remote-server-macos-aarch64.gz
         if-no-files-found: error
-    timeout-minutes: 60
+    timeout-minutes: 360
   bundle_mac_x86_64:
     needs:
     - run_tests_mac
     - clippy_mac
     - check_scripts
-    runs-on: namespace-profile-mac-large
+    runs-on: macos-latest
     env:
       CARGO_INCREMENTAL: 0
       ZED_CLIENT_CHECKSUM_SEED: ${{ secrets.ZED_CLIENT_CHECKSUM_SEED }}
@@ -625,11 +661,15 @@ jobs:
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       with:
         clean: false
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - name: steps::setup_node
       uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
       with:
@@ -667,13 +707,13 @@ jobs:
         name: zed-remote-server-macos-x86_64.gz
         path: target/zed-remote-server-macos-x86_64.gz
         if-no-files-found: error
-    timeout-minutes: 60
+    timeout-minutes: 360
   bundle_windows_aarch64:
     needs:
     - run_tests_windows
     - clippy_windows
     - check_scripts
-    runs-on: self-32vcpu-windows-2022
+    runs-on: windows-latest
     env:
       CARGO_INCREMENTAL: 0
       ZED_CLIENT_CHECKSUM_SEED: ${{ secrets.ZED_CLIENT_CHECKSUM_SEED }}
@@ -687,6 +727,7 @@ jobs:
       FILE_DIGEST: SHA256
       TIMESTAMP_DIGEST: SHA256
       TIMESTAMP_SERVER: http://timestamp.acs.microsoft.com
+      ZED_WORKSPACE: ${{ github.workspace }}
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -715,13 +756,13 @@ jobs:
         name: zed-remote-server-windows-aarch64.zip
         path: target/zed-remote-server-windows-aarch64.zip
         if-no-files-found: error
-    timeout-minutes: 60
+    timeout-minutes: 360
   bundle_windows_x86_64:
     needs:
     - run_tests_windows
     - clippy_windows
     - check_scripts
-    runs-on: self-32vcpu-windows-2022
+    runs-on: windows-latest
     env:
       CARGO_INCREMENTAL: 0
       ZED_CLIENT_CHECKSUM_SEED: ${{ secrets.ZED_CLIENT_CHECKSUM_SEED }}
@@ -735,6 +776,7 @@ jobs:
       FILE_DIGEST: SHA256
       TIMESTAMP_DIGEST: SHA256
       TIMESTAMP_SERVER: http://timestamp.acs.microsoft.com
+      ZED_WORKSPACE: ${{ github.workspace }}
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -763,7 +805,7 @@ jobs:
         name: zed-remote-server-windows-x86_64.zip
         path: target/zed-remote-server-windows-x86_64.zip
         if-no-files-found: error
-    timeout-minutes: 60
+    timeout-minutes: 360
   upload_release_assets:
     needs:
     - create_draft_release
@@ -775,7 +817,7 @@ jobs:
     - bundle_mac_x86_64
     - bundle_windows_aarch64
     - bundle_windows_x86_64
-    runs-on: namespace-profile-4x8-ubuntu-2204
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
@@ -810,7 +852,7 @@ jobs:
   validate_release_assets:
     needs:
     - upload_release_assets
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
@@ -836,7 +878,7 @@ jobs:
     needs:
     - upload_release_assets
     - compliance_check
-    runs-on: namespace-profile-8x16-ubuntu-2204
+    runs-on: ubuntu-latest
     steps:
     - name: steps::checkout_repo
       uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -844,11 +886,15 @@ jobs:
         clean: false
         fetch-depth: 0
         ref: ${{ github.ref }}
-    - name: steps::cache_rust_dependencies_namespace
-      uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
-        cache: rust
-        path: ~/.rustup
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
     - id: run-compliance-check
       name: release::add_compliance_steps::run_compliance_check
       run: |
@@ -888,7 +934,7 @@ jobs:
     - validate_release_assets
     - release_compliance_check
     if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-pre')
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - id: generate-token
       name: steps::authenticate_as_zippy
@@ -967,7 +1013,7 @@ jobs:
     - bundle_windows_aarch64
     - bundle_windows_x86_64
     if: always()
-    runs-on: namespace-profile-2x4-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
     - id: generate-webhook-message
       name: release::generate_slack_message

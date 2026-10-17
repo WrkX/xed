@@ -9,7 +9,7 @@ use crate::tasks::workflows::steps::GitRef;
 use crate::tasks::workflows::steps::RefSha;
 use crate::tasks::workflows::steps::{
     CheckoutStep, CommonPermissionSets, DownloadArtifactStep, IfNoFilesFound, ResultEncoding,
-    TokenPermissions, UploadArtifactStep, cache_rust_dependencies_namespace,
+    TokenPermissions, UploadArtifactStep, cache_rust_dependencies,
 };
 use crate::tasks::workflows::vars::JobOutput;
 use crate::tasks::workflows::{
@@ -171,7 +171,7 @@ fn fetch_extension_repos(filter_repos_input: &WorkflowInput) -> (NamedJob, JobOu
         .add_step(get_prev_tag)
         .add_step(calc_changes)
         .add_step(get_org_repositories)
-        .add_step(cache_rust_dependencies_namespace())
+        .add_step(cache_rust_dependencies())
         .add_step(generate_workflow_files())
         .add_step(upload_workflow_files());
 

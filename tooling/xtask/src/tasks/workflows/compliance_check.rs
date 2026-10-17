@@ -38,7 +38,7 @@ fn scheduled_compliance_check() -> steps::NamedJob {
         .with_repository_owner_guard()
         .runs_on(runners::LINUX_SMALL)
         .add_step(steps::checkout_repo().with_full_history())
-        .add_step(steps::cache_rust_dependencies_namespace())
+        .add_step(steps::cache_rust_dependencies())
         .add_step(determine_version_step);
 
     named::job(

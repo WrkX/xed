@@ -40,8 +40,18 @@ function Get-VSArch {
     }
 }
 
+# Locate Visual Studio via vswhere rather than a hardcoded path: the edition and
+# install location differ between the self-hosted Windows runners (Community)
+# and GitHub-hosted runners (Enterprise).
+$vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+$vsInstallPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+if (-not $vsInstallPath) {
+    Write-Error "Could not locate a Visual Studio installation with C++ build tools."
+    exit 1
+}
+$vsDevShell = Join-Path $vsInstallPath "Common7\Tools\Launch-VsDevShell.ps1"
 Push-Location
-& "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1" -Arch (Get-VSArch -Arch $Architecture) -HostArch (Get-VSArch -Arch $OSArchitecture)
+& $vsDevShell -Arch (Get-VSArch -Arch $Architecture) -HostArch (Get-VSArch -Arch $OSArchitecture)
 Pop-Location
 
 $target = "$Architecture-pc-windows-msvc"
@@ -207,9 +217,17 @@ function MakeAppx {
         }
     }
     Copy-Item -Path "$manifestFile" -Destination "$innoDir\make_appx\AppxManifest.xml"
-    # Add makeAppx.exe to Path
-    $sdk = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64"
-    $env:Path += ';' + $sdk
+    # Add makeAppx.exe to Path. The installed Windows SDK version varies between
+    # runner images, so pick the newest one that actually ships makeAppx.exe.
+    $sdkBin = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path (Join-Path $_.FullName "x64\makeAppx.exe") } |
+        Sort-Object -Property Name -Descending |
+        Select-Object -First 1
+    if (-not $sdkBin) {
+        Write-Error "Could not find makeAppx.exe in any installed Windows SDK."
+        exit 1
+    }
+    $env:Path += ';' + (Join-Path $sdkBin.FullName "x64")
     makeAppx.exe pack /d "$innoDir\make_appx" /p "$innoDir\zed_explorer_command_injector.appx" /nv
 }
 
