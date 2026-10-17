@@ -744,6 +744,51 @@ pub fn upload_artifact(
     }
 }
 
+/// Uploads an artifact, retrying once if the first attempt fails.
+///
+/// GitHub's artifact service intermittently fails the initial `CreateArtifact`
+/// request with `ETIMEDOUT`/`ENOTFOUND`. That's a transient network flake, not a
+/// real failure, so the first attempt is allowed to fail and a second attempt
+/// runs only if it did. The job still fails if both attempts fail.
+pub fn upload_artifact_with_retry(
+    artifact_name: impl Into<String>,
+    path: impl Into<String>,
+) -> Vec<Step<Use>> {
+    let artifact_name = artifact_name.into();
+    let path = path.into();
+    let name = format!("steps::upload_artifact ({artifact_name})");
+    let id = format!(
+        "upload_{}",
+        artifact_name
+            .chars()
+            .map(|character| if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '_'
+            })
+            .collect::<String>()
+    );
+
+    let base = Step::new(&name)
+        .uses("actions", "upload-artifact", UPLOAD_ARTIFACT_SHA)
+        .add_with(("name", artifact_name.clone()))
+        .add_with(("path", path.clone()))
+        .add_with(("if-no-files-found", "error"))
+        .add_with(("overwrite", true));
+
+    let first = base
+        .clone()
+        .id(format!("{id}_attempt1"))
+        .continue_on_error(true);
+    let second = base
+        .id(format!("{id}_attempt2"))
+        .if_condition(Expression::new(format!(
+            "steps.{id}_attempt1.outcome == 'failure'"
+        )));
+
+    vec![first, second]
+}
+
 #[derive(Default)]
 pub(crate) struct DownloadArtifactStep {
     name: String,

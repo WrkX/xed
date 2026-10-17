@@ -394,8 +394,8 @@ pub enum UiLayout {
     #[default]
     Default,
     /// Show title-bar panel controls and hide left-dock buttons when closed.
-    #[serde(rename = "vscode")]
-    #[strum(serialize = "VS Code")]
+    #[serde(rename = "cursor")]
+    #[strum(serialize = "Cursor")]
     VsCode,
 }
 
@@ -1250,12 +1250,12 @@ mod tests {
             "\"default\""
         );
         assert_eq!(
-            serde_json::to_string(&UiLayout::VsCode).expect("VS Code layout should serialize"),
-            "\"vscode\""
+            serde_json::to_string(&UiLayout::VsCode).expect("Cursor layout should serialize"),
+            "\"cursor\""
         );
         assert_eq!(
-            serde_json::from_str::<UiLayout>("\"vscode\"")
-                .expect("VS Code layout should deserialize"),
+            serde_json::from_str::<UiLayout>("\"cursor\"")
+                .expect("Cursor layout should deserialize"),
             UiLayout::VsCode
         );
     }

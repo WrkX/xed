@@ -115,18 +115,39 @@ pub(crate) fn bundle_mac(
                 job.add_step(steps::install_cmake())
             })
             .add_step(bundle_mac(arch))
-            .add_step(upload_artifact(&format!(
-                "target/{target}/release/{artifact_name}"
-            )))
-            .add_step(upload_artifact(&format!(
-                "target/{remote_server_artifact_name}"
-            ))),
+            .map(|job| {
+                add_uploads(
+                    job,
+                    [
+                        format!("target/{target}/release/{artifact_name}"),
+                        format!("target/{remote_server_artifact_name}"),
+                    ],
+                )
+            }),
     }
 }
 
 pub fn upload_artifact(path: &str) -> UploadArtifactStep {
     let name = Path::new(path).file_name().unwrap().to_str().unwrap();
     steps::upload_artifact(name, path).if_no_files_found(IfNoFilesFound::Error)
+}
+
+/// Adds retrying uploads for each of `paths` to `job`.
+///
+/// A single `actions/upload-artifact` step occasionally fails with a transient
+/// `CreateArtifact ... ETIMEDOUT` from GitHub's artifact service, which would
+/// otherwise lose the built artifact (and, for release builds, fail the job).
+fn add_uploads(job: Job, paths: impl IntoIterator<Item = String>) -> Job {
+    paths.into_iter().fold(job, |job, path| {
+        let artifact_name = Path::new(&path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("artifact paths should have a file name")
+            .to_owned();
+        steps::upload_artifact_with_retry(artifact_name, path)
+            .into_iter()
+            .fold(job, |job, step| job.add_step(step))
+    })
 }
 
 pub(crate) fn build_static_bwrap(arch: Arch, deps: &[&NamedJob]) -> NamedJob {
@@ -208,10 +229,15 @@ pub(crate) fn bundle_linux(
             } else {
                 "./script/bundle-linux"
             }))
-            .add_step(upload_artifact(&format!("target/release/{artifact_name}")))
-            .add_step(upload_artifact(&format!(
-                "target/{remote_server_artifact_name}"
-            ))),
+            .map(|job| {
+                add_uploads(
+                    job,
+                    [
+                        format!("target/release/{artifact_name}"),
+                        format!("target/{remote_server_artifact_name}"),
+                    ],
+                )
+            }),
     }
 }
 
@@ -252,10 +278,15 @@ pub(crate) fn bundle_windows(
             .add_step(steps::setup_sentry())
             .add_step(steps::clear_target_dir_if_large(platform))
             .add_step(bundle_windows(arch))
-            .add_step(upload_artifact(&format!("target/{artifact_name}")))
-            .add_step(upload_artifact(&format!(
-                "target/{remote_server_artifact_name}"
-            ))),
+            .map(|job| {
+                add_uploads(
+                    job,
+                    [
+                        format!("target/{artifact_name}"),
+                        format!("target/{remote_server_artifact_name}"),
+                    ],
+                )
+            }),
     }
 }
 

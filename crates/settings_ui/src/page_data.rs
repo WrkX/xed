@@ -5103,7 +5103,7 @@ fn window_and_layout_page() -> SettingsPage {
             SettingsPageItem::SectionHeader("Layout"),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "UI Layout",
-                description: "Choose the original Zed layout or the VS Code style panel controls.",
+                description: "Choose the original Zed layout or the Cursor style panel controls.",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("ui_layout"),

@@ -96,7 +96,7 @@
   //   choices: contained, full, left_aligned, right_aligned
   "bottom_dock_layout": "contained",
   // Overall interface layout mode. Defaults to "default".
-  //   choices: default, vscode
+  //   choices: default, cursor
   "ui_layout": "default",
   // The direction that you want to split panes horizontally. Defaults to "down"
   "pane_split_direction_horizontal": "down",

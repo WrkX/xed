@@ -285,15 +285,15 @@ Zed takes a different approach:
   - Jump directly to symbols (`Cmd+Shift+O`)
   - Use split panes and tabs for context, rather than keeping a large file tree open (though you can do this with the Project Panel if you prefer).
 
-In the default layout, the UI keeps auxiliary panels out of the way so navigation stays centered on code. If you prefer VS Code-style panel controls, open the Settings Editor and search for “UI Layout”, then choose “VS Code”. Or add this to your `settings.json`:
+In the default layout, the UI keeps auxiliary panels out of the way so navigation stays centered on code. If you prefer Cursor-style panel controls, open the Settings Editor and search for “UI Layout”, then choose “Cursor”. Or add this to your `settings.json`:
 
 ```json [settings]
 {
-  "ui_layout": "vscode"
+  "ui_layout": "cursor"
 }
 ```
 
-### VS Code-style panel controls {#vscode-style-panel-controls}
+### Cursor-style panel controls {#cursor-style-panel-controls}
 
 This layout adds Left Sidebar, Terminal, and Agent Panel buttons to the title bar. The Left Sidebar button toggles the left dock. The Terminal and Agent Panel buttons focus their panel; when a panel is already visible, click again to close its dock. The left dock hides its panel buttons while the dock is closed.
 
