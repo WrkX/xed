@@ -162,6 +162,15 @@ pub struct EditPredictionSettingsContent {
     /// The mode used to display edit predictions in the buffer.
     /// Provider support required.
     pub mode: Option<EditPredictionsMode>,
+    /// The modifier key that reveals the edit prediction preview in `subtle` mode.
+    ///
+    /// Default: auto
+    pub preview_modifier: Option<EditPredictionsPreviewModifier>,
+    /// Whether the preview modifier reveals the edit prediction preview in `subtle`
+    /// mode by being held down, or by being toggled on and off with a tap.
+    ///
+    /// Default: hold
+    pub preview_trigger: Option<EditPredictionsPreviewTrigger>,
     /// Settings specific to GitHub Copilot.
     pub copilot: Option<CopilotEditPredictionSettingsContent>,
     /// Settings specific to Codestral.
@@ -442,6 +451,60 @@ pub enum EditPredictionsMode {
     #[default]
     #[serde(alias = "eager_preview")]
     Eager,
+}
+
+/// The modifier key that reveals the edit prediction preview in `subtle` mode.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum EditPredictionsPreviewModifier {
+    /// Use the modifier of the keybinding that accepts edit predictions (default).
+    #[default]
+    Auto,
+    /// The control key.
+    Control,
+    /// The alt key, also known as option on macOS.
+    #[serde(alias = "option")]
+    Alt,
+    /// The command key on macOS, and the Windows key or Super key elsewhere.
+    #[serde(alias = "cmd", alias = "meta", alias = "super", alias = "windows")]
+    Command,
+}
+
+/// How the preview modifier reveals the edit prediction preview in `subtle` mode.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum EditPredictionsPreviewTrigger {
+    /// Reveal the preview while the modifier is held down (default).
+    #[default]
+    Hold,
+    /// Toggle the preview on and off each time the modifier is tapped.
+    Toggle,
 }
 
 /// Controls the soft-wrapping behavior in the editor.

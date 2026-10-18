@@ -843,6 +843,7 @@ impl VsCodeSettings {
             line_endings_button: None,
             active_encoding_button: None,
             pending_keystrokes_indicator: None,
+            edit_prediction_button: None,
         })
     }
 

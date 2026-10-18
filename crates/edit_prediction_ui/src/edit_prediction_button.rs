@@ -17,7 +17,8 @@ use gpui::{
 };
 use indoc::indoc;
 use language::{
-    EditPredictionsMode, File, Language,
+    EditPredictionsMode, EditPredictionsPreviewModifier, EditPredictionsPreviewTrigger, File,
+    Language,
     language_settings::{
         AllLanguageSettings, EditPredictionProvider, LanguageSettings, all_language_settings,
     },
@@ -35,8 +36,8 @@ use ui::{
 use util::ResultExt as _;
 
 use workspace::{
-    HideStatusItem, StatusItemView, Toast, Workspace, create_and_open_local_file, item::ItemHandle,
-    notifications::NotificationId,
+    HideStatusItem, StatusBarSettings, StatusItemView, Toast, Workspace, create_and_open_local_file,
+    item::ItemHandle, notifications::NotificationId,
 };
 use zed_actions::{OpenBrowser, OpenSettingsAt};
 
@@ -74,6 +75,11 @@ impl Render for EditPredictionButton {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Return empty div if AI is disabled
         if DisableAiSettings::get_global(cx).disable_ai {
+            return div().hidden();
+        }
+
+        // Return empty div if the user has hidden this button from the status bar.
+        if !StatusBarSettings::get_global(cx).edit_prediction_button {
             return div().hidden();
         }
 
@@ -935,6 +941,81 @@ impl EditPredictionButton {
                         }),
                 );
 
+        let preview_modifier = settings.edit_predictions.preview_modifier;
+        let preview_trigger = settings.edit_predictions.preview_trigger;
+
+        let modifier_entry = |label: &'static str,
+                              documentation: &'static str,
+                              modifier: EditPredictionsPreviewModifier,
+                              fs: Arc<dyn Fs>| {
+            ContextMenuEntry::new(label)
+                .toggleable(IconPosition::Start, preview_modifier == modifier)
+                .documentation_aside(DocumentationSide::Left, move |_| {
+                    Label::new(documentation).into_any_element()
+                })
+                .handler(move |_, cx| {
+                    set_edit_prediction_preview_modifier(fs.clone(), modifier, cx);
+                })
+        };
+
+        menu = menu
+            .separator()
+            .header("Subtle Preview Modifier")
+            .item(modifier_entry(
+                "Auto",
+                "Use the modifier of the keybinding that accepts edit predictions.",
+                EditPredictionsPreviewModifier::Auto,
+                fs.clone(),
+            ))
+            .item(modifier_entry(
+                "Control",
+                "Reveal the preview while the control key is pressed.",
+                EditPredictionsPreviewModifier::Control,
+                fs.clone(),
+            ))
+            .item(modifier_entry(
+                ui::alt_key_name!(),
+                concat!("Reveal the preview while the ", ui::alt_key_name!(), " key is pressed."),
+                EditPredictionsPreviewModifier::Alt,
+                fs.clone(),
+            ))
+            .item(modifier_entry(
+                "Command",
+                "Reveal the preview while the command key is pressed.",
+                EditPredictionsPreviewModifier::Command,
+                fs.clone(),
+            ));
+
+        let trigger_entry = |label: &'static str,
+                             documentation: &'static str,
+                             trigger: EditPredictionsPreviewTrigger,
+                             fs: Arc<dyn Fs>| {
+            ContextMenuEntry::new(label)
+                .toggleable(IconPosition::Start, preview_trigger == trigger)
+                .documentation_aside(DocumentationSide::Left, move |_| {
+                    Label::new(documentation).into_any_element()
+                })
+                .handler(move |_, cx| {
+                    set_edit_prediction_preview_trigger(fs.clone(), trigger, cx);
+                })
+        };
+
+        menu = menu
+            .separator()
+            .header("Subtle Preview Behavior")
+            .item(trigger_entry(
+                "Hold",
+                "Show the preview only while the modifier key is held down.",
+                EditPredictionsPreviewTrigger::Hold,
+                fs.clone(),
+            ))
+            .item(trigger_entry(
+                "Toggle",
+                "Show the preview when the modifier key is pressed, and hide it when pressed again.",
+                EditPredictionsPreviewTrigger::Toggle,
+                fs.clone(),
+            ));
+
         menu = menu.separator().header("Privacy");
 
         if matches!(provider, EditPredictionProvider::Zed) {
@@ -1543,10 +1624,12 @@ impl StatusItemView for EditPredictionButton {
     }
 
     fn hide_setting(&self, _: &App) -> Option<HideStatusItem> {
-        // This button is already gated on having a non-disabled edit
-        // prediction provider, which the user manages through provider/AI
-        // settings.
-        None
+        Some(HideStatusItem::new(|settings| {
+            settings
+                .status_bar
+                .get_or_insert_default()
+                .edit_prediction_button = Some(false);
+        }))
     }
 }
 
@@ -1730,6 +1813,46 @@ fn toggle_edit_prediction_mode(fs: Arc<dyn Fs>, mode: EditPredictionsMode, cx: &
             }
         });
     }
+}
+
+fn set_edit_prediction_preview_modifier(
+    fs: Arc<dyn Fs>,
+    modifier: EditPredictionsPreviewModifier,
+    cx: &mut App,
+) {
+    let settings = AllLanguageSettings::get_global(cx);
+    if settings.edit_predictions.preview_modifier == modifier {
+        return;
+    }
+
+    update_settings_file(fs, cx, move |settings, _cx| {
+        settings
+            .project
+            .all_languages
+            .edit_predictions
+            .get_or_insert(Default::default())
+            .preview_modifier = Some(modifier);
+    });
+}
+
+fn set_edit_prediction_preview_trigger(
+    fs: Arc<dyn Fs>,
+    trigger: EditPredictionsPreviewTrigger,
+    cx: &mut App,
+) {
+    let settings = AllLanguageSettings::get_global(cx);
+    if settings.edit_predictions.preview_trigger == trigger {
+        return;
+    }
+
+    update_settings_file(fs, cx, move |settings, _cx| {
+        settings
+            .project
+            .all_languages
+            .edit_predictions
+            .get_or_insert(Default::default())
+            .preview_trigger = Some(trigger);
+    });
 }
 
 fn render_zeta_tab_animation(cx: &App) -> impl IntoElement {

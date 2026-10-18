@@ -774,6 +774,7 @@ impl EditorElement {
             register_action(editor, window, Editor::accept_next_word_edit_prediction);
             register_action(editor, window, Editor::accept_next_line_edit_prediction);
             register_action(editor, window, Editor::accept_edit_prediction);
+            register_action(editor, window, Editor::accept_edit_prediction_preview);
             register_action(editor, window, Editor::restore_file);
             register_action(editor, window, Editor::git_restore);
             register_action(editor, window, Editor::restore_and_next);

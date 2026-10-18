@@ -616,6 +616,10 @@ pub struct StatusBarSettingsContent {
     ///
     /// Default: true
     pub pending_keystrokes_indicator: Option<bool>,
+    /// Whether to show the edit prediction button in the status bar.
+    ///
+    /// Default: true
+    pub edit_prediction_button: Option<bool>,
 }
 
 #[derive(

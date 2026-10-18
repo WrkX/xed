@@ -55,6 +55,8 @@ pub(super) enum EditPredictionSettings {
     Enabled {
         show_in_menu: bool,
         preview_requires_modifier: bool,
+        preview_modifier: EditPredictionsPreviewModifier,
+        preview_trigger: EditPredictionsPreviewTrigger,
     },
 }
 
@@ -602,6 +604,18 @@ impl Editor {
         self.accept_partial_edit_prediction(EditPredictionGranularity::Full, window, cx);
     }
 
+    /// Accepts the edit prediction when its preview is visible. This is bound to
+    /// the keystrokes that combine the preview modifier with the accept key, so
+    /// that accepting works no matter which preview modifier is configured.
+    pub fn accept_edit_prediction_preview(
+        &mut self,
+        _: &AcceptEditPredictionPreview,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.accept_partial_edit_prediction(EditPredictionGranularity::Full, window, cx);
+    }
+
     pub fn has_active_edit_prediction(&self) -> bool {
         self.active_edit_prediction.is_some()
     }
@@ -633,6 +647,23 @@ impl Editor {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<gpui::KeybindingKeystroke> {
+        // When the preview modifier is configured explicitly, reuse the key of the
+        // accept keybinding but swap in the configured modifier.
+        if let Some(modifier) = self.configured_preview_modifier() {
+            let mut keystroke = self
+                .accept_edit_prediction_keystroke(EditPredictionGranularity::Full, window, cx)
+                .unwrap_or_else(|| {
+                    gpui::KeybindingKeystroke::from_keystroke(gpui::Keystroke {
+                        modifiers: Modifiers::none(),
+                        key: "tab".to_owned(),
+                        key_char: None,
+                    })
+                });
+            keystroke.set_modifiers(modifier);
+            keystroke.remove_key_char();
+            return Some(keystroke);
+        }
+
         let key_context = self.key_context_internal(true, window, cx);
         let bindings = window.bindings_for_action_in_context(&AcceptEditPrediction, key_context);
         bindings
@@ -724,6 +755,28 @@ impl Editor {
         }
     }
 
+    /// Returns the modifier that reveals the edit prediction preview when it is
+    /// configured explicitly. Returns `None` when the modifier should be derived
+    /// from the keybinding used to accept edit predictions.
+    fn configured_preview_modifier(&self) -> Option<Modifiers> {
+        match self.edit_prediction_settings {
+            EditPredictionSettings::Disabled => None,
+            EditPredictionSettings::Enabled { preview_modifier, .. } => match preview_modifier {
+                EditPredictionsPreviewModifier::Auto => None,
+                EditPredictionsPreviewModifier::Control => Some(Modifiers::control()),
+                EditPredictionsPreviewModifier::Alt => Some(Modifiers::alt()),
+                EditPredictionsPreviewModifier::Command => Some(Modifiers::command()),
+            },
+        }
+    }
+
+    fn edit_prediction_preview_trigger(&self) -> EditPredictionsPreviewTrigger {
+        match self.edit_prediction_settings {
+            EditPredictionSettings::Disabled => EditPredictionsPreviewTrigger::Hold,
+            EditPredictionSettings::Enabled { preview_trigger, .. } => preview_trigger,
+        }
+    }
+
     pub(super) fn discard_edit_prediction(
         &mut self,
         reason: EditPredictionDiscardReason,
@@ -771,21 +824,52 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         let modifiers_held = self.edit_prediction_preview_modifiers_held(modifiers, window, cx);
+        let modifier_pressed = modifiers_held && !self.edit_prediction_preview_modifier_held;
+        self.edit_prediction_preview_modifier_held = modifiers_held;
 
-        if modifiers_held {
-            if matches!(
-                self.edit_prediction_preview,
-                EditPredictionPreview::Inactive { .. }
-            ) {
-                self.edit_prediction_preview = EditPredictionPreview::Active {
-                    previous_scroll_position: None,
-                    since: Instant::now(),
-                };
-
-                self.update_visible_edit_prediction(window, cx);
-                cx.notify();
+        match self.edit_prediction_preview_trigger() {
+            EditPredictionsPreviewTrigger::Hold => {
+                if modifiers_held {
+                    self.activate_edit_prediction_preview(window, cx);
+                } else {
+                    self.deactivate_edit_prediction_preview(window, cx);
+                }
             }
-        } else if let EditPredictionPreview::Active {
+            // In toggle mode the preview is flipped each time the modifier is
+            // pressed, and stays in place while the modifier is released.
+            EditPredictionsPreviewTrigger::Toggle => {
+                if modifier_pressed {
+                    if self.edit_prediction_preview_is_active() {
+                        self.deactivate_edit_prediction_preview(window, cx);
+                    } else {
+                        self.activate_edit_prediction_preview(window, cx);
+                    }
+                }
+            }
+        }
+    }
+
+    fn activate_edit_prediction_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(
+            self.edit_prediction_preview,
+            EditPredictionPreview::Inactive { .. }
+        ) {
+            self.edit_prediction_preview = EditPredictionPreview::Active {
+                previous_scroll_position: None,
+                since: Instant::now(),
+            };
+
+            self.update_visible_edit_prediction(window, cx);
+            cx.notify();
+        }
+    }
+
+    fn deactivate_edit_prediction_preview(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let EditPredictionPreview::Active {
             previous_scroll_position,
             since,
         } = self.edit_prediction_preview
@@ -802,12 +886,26 @@ impl Editor {
             }
 
             self.edit_prediction_preview = EditPredictionPreview::Inactive {
-                released_too_fast: since.elapsed() < Duration::from_millis(200),
+                released_too_fast: self.edit_prediction_preview_trigger()
+                    == EditPredictionsPreviewTrigger::Hold
+                    && since.elapsed() < Duration::from_millis(200),
             };
             self.clear_row_highlights::<EditPredictionPreview>();
             self.update_visible_edit_prediction(window, cx);
             cx.notify();
         }
+    }
+
+    /// Releases the edit prediction preview. Called when the editor loses focus,
+    /// since the modifier release may never be observed after e.g. switching
+    /// windows, which would otherwise leave the preview stuck on.
+    pub(super) fn release_edit_prediction_preview(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_prediction_preview_modifier_held = false;
+        self.deactivate_edit_prediction_preview(window, cx);
     }
 
     pub(super) fn update_visible_edit_prediction(
@@ -1472,6 +1570,12 @@ impl Editor {
             return false;
         }
 
+        // When a preview modifier is configured explicitly, it alone decides
+        // whether the preview is revealed, independent of any keybinding.
+        if let Some(configured_modifier) = self.configured_preview_modifier() {
+            return configured_modifier.modified() && &configured_modifier == modifiers;
+        }
+
         let key_context = self.key_context_internal(true, window, cx);
         let actions: [&dyn Action; 3] = [
             &AcceptEditPrediction,
@@ -1589,12 +1693,15 @@ impl Editor {
                 .is_some_and(|provider| provider.provider.show_predictions_in_menu());
 
         let file = buffer.read(cx).file();
+        let edit_predictions_settings = &all_language_settings(file, cx).edit_predictions;
         let preview_requires_modifier =
-            all_language_settings(file, cx).edit_predictions_mode() == EditPredictionsMode::Subtle;
+            edit_predictions_settings.mode == EditPredictionsMode::Subtle;
 
         EditPredictionSettings::Enabled {
             show_in_menu,
             preview_requires_modifier,
+            preview_modifier: edit_predictions_settings.preview_modifier,
+            preview_trigger: edit_predictions_settings.preview_trigger,
         }
     }
 

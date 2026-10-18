@@ -224,6 +224,7 @@ pub struct StatusBarSettings {
     pub line_endings_button: bool,
     pub active_encoding_button: EncodingDisplayOptions,
     pub pending_keystrokes_indicator: bool,
+    pub edit_prediction_button: bool,
 }
 
 impl Settings for StatusBarSettings {
@@ -237,6 +238,7 @@ impl Settings for StatusBarSettings {
             line_endings_button: status_bar.line_endings_button.unwrap(),
             active_encoding_button: status_bar.active_encoding_button.unwrap(),
             pending_keystrokes_indicator: status_bar.pending_keystrokes_indicator.unwrap(),
+            edit_prediction_button: status_bar.edit_prediction_button.unwrap(),
         }
     }
 }

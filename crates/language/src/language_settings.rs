@@ -18,9 +18,10 @@ use settings::{DelayMs, DocumentFoldingRanges, DocumentSymbols, IntoGpui, Semant
 pub use settings::{
     AutoIndentMode, CompletionSettingsContent, ConfiguredLanguageServer,
     EditPredictionDataCollectionChoice, EditPredictionPromptFormatContent, EditPredictionProvider,
-    EditPredictionsMode, FormatOnSave, Formatter, FormatterList, InlayHintKind,
-    LanguageSettingsContent, LineEndingSetting, LspInsertMode, REST_OF_LANGUAGE_SERVERS,
-    RewrapBehavior, ShowWhitespaceSetting, SoftWrap, SoftWrapIndent, WordsCompletionMode,
+    EditPredictionsMode, EditPredictionsPreviewModifier, EditPredictionsPreviewTrigger,
+    FormatOnSave, Formatter, FormatterList, InlayHintKind, LanguageSettingsContent,
+    LineEndingSetting, LspInsertMode, REST_OF_LANGUAGE_SERVERS, RewrapBehavior,
+    ShowWhitespaceSetting, SoftWrap, SoftWrapIndent, WordsCompletionMode,
 };
 use settings::{RegisterSetting, Settings, SettingsLocation, SettingsStore, merge_from::MergeFrom};
 use shellexpand;
@@ -529,6 +530,10 @@ pub struct EditPredictionSettings {
     pub disabled_globs: Vec<DisabledGlob>,
     /// Configures how edit predictions are displayed in the buffer.
     pub mode: settings::EditPredictionsMode,
+    /// The modifier key that reveals the edit prediction preview in `subtle` mode.
+    pub preview_modifier: settings::EditPredictionsPreviewModifier,
+    /// Whether the preview modifier reveals the preview by being held or toggled.
+    pub preview_trigger: settings::EditPredictionsPreviewTrigger,
     /// Settings specific to GitHub Copilot.
     pub copilot: CopilotEditPredictionSettings,
     /// Settings specific to Codestral.
@@ -1071,6 +1076,8 @@ impl settings::Settings for AllLanguageSettings {
                     })
                     .collect(),
                 mode: edit_predictions_mode,
+                preview_modifier: edit_predictions.preview_modifier.unwrap_or_default(),
+                preview_trigger: edit_predictions.preview_trigger.unwrap_or_default(),
                 copilot: copilot_settings,
                 codestral: codestral_settings,
                 ollama: ollama_settings,

@@ -184,10 +184,11 @@ use itertools::{Either, Itertools};
 use language::{
     AutoindentMode, BlockCommentConfig, BracketMatch, BracketPair, Buffer, BufferRow,
     BufferSnapshot, Capability, CharClassifier, CharKind, CharScopeContext, CodeLabel, CursorShape,
-    DiagnosticEntryRef, DiffOptions, EditPredictionsMode, EditPreview, HighlightedText, IndentKind,
-    IndentSize, Language, LanguageAwareStyling, LanguageName, LanguageRegistry, LanguageScope,
-    LocalFile, OffsetRangeExt, OutlineItem, Point, Selection, SelectionGoal, TextObject,
-    TransactionId, TreeSitterOptions, WordsQuery,
+    DiagnosticEntryRef, DiffOptions, EditPredictionsMode, EditPredictionsPreviewModifier,
+    EditPredictionsPreviewTrigger, EditPreview, HighlightedText, IndentKind, IndentSize, Language,
+    LanguageAwareStyling, LanguageName, LanguageRegistry, LanguageScope, LocalFile, OffsetRangeExt,
+    OutlineItem, Point, Selection, SelectionGoal, TextObject, TransactionId, TreeSitterOptions,
+    WordsQuery,
     language_settings::{
         self, AllLanguageSettings, LanguageSettings, LspInsertMode, RewrapBehavior, SoftWrapIndent,
         WordsCompletionMode, all_language_settings,
@@ -1101,6 +1102,9 @@ pub struct Editor {
     show_completions_on_input_override: Option<bool>,
     menu_edit_predictions_policy: MenuEditPredictionsPolicy,
     edit_prediction_preview: EditPredictionPreview,
+    /// Whether the preview modifier was held on the previous modifiers-changed
+    /// event. Used to detect the press edge when toggling the preview.
+    edit_prediction_preview_modifier_held: bool,
     in_leading_whitespace: bool,
     next_inlay_id: usize,
     next_color_inlay_id: usize,
@@ -2473,6 +2477,7 @@ impl Editor {
             edit_prediction_preview: EditPredictionPreview::Inactive {
                 released_too_fast: false,
             },
+            edit_prediction_preview_modifier_held: false,
             inline_diagnostics_enabled: full_mode,
             diagnostics_enabled: full_mode,
             word_completions_enabled: full_mode,
@@ -2864,6 +2869,10 @@ impl Editor {
             key_context.set("edit_prediction_mode", "subtle")
         } else {
             key_context.set("edit_prediction_mode", "eager");
+        }
+
+        if self.edit_prediction_preview_is_active() {
+            key_context.add("edit_prediction_preview");
         }
 
         if self.selection_mark_mode {
@@ -11014,7 +11023,7 @@ impl Editor {
     fn handle_focus_out(
         &mut self,
         event: FocusOutEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if event.blurred != self.focus_handle {
@@ -11022,9 +11031,13 @@ impl Editor {
         }
         self.selection_drag_state = SelectionDragState::None;
         self.refresh_inlay_hints(InlayHintRefreshReason::ModifiersChanged(false), cx);
+        // The modifier release may never reach us while unfocused, so make sure a
+        // held preview is not left active.
+        self.release_edit_prediction_preview(window, cx);
     }
 
     pub fn handle_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.release_edit_prediction_preview(window, cx);
         self.cursor_animations.clear();
         self.blink_manager.update(cx, BlinkManager::disable);
         self.buffer

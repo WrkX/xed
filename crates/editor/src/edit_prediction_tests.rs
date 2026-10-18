@@ -8,7 +8,7 @@ use gpui::{
     Task, prelude::*, size,
 };
 use indoc::indoc;
-use language::EditPredictionsMode;
+use language::{EditPredictionsMode, EditPredictionsPreviewModifier, EditPredictionsPreviewTrigger};
 use language::{Buffer, CodeLabel};
 use multi_buffer::{Anchor, MultiBufferSnapshot, ToPoint};
 use project::{Completion, CompletionResponse, CompletionSource};
@@ -739,6 +739,178 @@ async fn test_edit_prediction_preview_activates_when_prediction_arrives_with_mod
             editor.edit_prediction_preview_is_active(),
             "prediction preview should activate immediately when the prediction arrives while the preview modifier is still held",
         );
+    });
+}
+
+#[gpui::test]
+async fn test_edit_prediction_preview_toggle_trigger(cx: &mut gpui::TestAppContext) {
+    init_test(cx, |_| {});
+    load_default_keymap(cx);
+    update_test_language_settings(cx, &|settings| {
+        let edit_predictions = settings.edit_predictions.get_or_insert_default();
+        edit_predictions.mode = Some(EditPredictionsMode::Subtle);
+        edit_predictions.preview_trigger = Some(EditPredictionsPreviewTrigger::Toggle);
+    });
+
+    let mut cx = EditorTestContext::new(cx).await;
+    let provider = cx.new(|_| FakeEditPredictionDelegate::default());
+    assign_editor_completion_provider(provider.clone(), &mut cx);
+    cx.set_state("let x = ˇ;");
+    propose_edits(&provider, vec![(8..8, "42")], &mut cx);
+    cx.update_editor(|editor, window, cx| {
+        editor.set_menu_edit_predictions_policy(MenuEditPredictionsPolicy::ByProvider);
+        editor.update_visible_edit_prediction(window, cx)
+    });
+
+    let preview_modifiers = cx.update_editor(|editor, window, cx| {
+        *editor
+            .preview_edit_prediction_keystroke(window, cx)
+            .unwrap()
+            .modifiers()
+    });
+
+    // Tapping the modifier reveals the preview.
+    cx.simulate_modifiers_change(preview_modifiers);
+    cx.run_until_parked();
+    cx.editor(|editor, _, _| {
+        assert!(editor.edit_prediction_preview_is_active());
+    });
+
+    // Releasing the modifier keeps the preview visible.
+    cx.simulate_modifiers_change(Modifiers::none());
+    cx.run_until_parked();
+    cx.editor(|editor, _, _| {
+        assert!(
+            editor.edit_prediction_preview_is_active(),
+            "toggle mode must keep the preview visible after the modifier is released",
+        );
+    });
+
+    // Tapping the modifier again hides the preview.
+    cx.simulate_modifiers_change(preview_modifiers);
+    cx.run_until_parked();
+    cx.editor(|editor, _, _| {
+        assert!(!editor.edit_prediction_preview_is_active());
+    });
+
+    cx.simulate_modifiers_change(Modifiers::none());
+    cx.run_until_parked();
+    cx.editor(|editor, _, _| {
+        assert!(!editor.edit_prediction_preview_is_active());
+    });
+}
+
+#[gpui::test]
+async fn test_edit_prediction_preview_explicit_modifier(cx: &mut gpui::TestAppContext) {
+    init_test(cx, |_| {});
+    load_default_keymap(cx);
+    update_test_language_settings(cx, &|settings| {
+        let edit_predictions = settings.edit_predictions.get_or_insert_default();
+        edit_predictions.mode = Some(EditPredictionsMode::Subtle);
+        edit_predictions.preview_modifier = Some(EditPredictionsPreviewModifier::Control);
+    });
+
+    let mut cx = EditorTestContext::new(cx).await;
+    let provider = cx.new(|_| FakeEditPredictionDelegate::default());
+    assign_editor_completion_provider(provider.clone(), &mut cx);
+    cx.set_state("let x = ˇ;");
+    propose_edits(&provider, vec![(8..8, "42")], &mut cx);
+    cx.update_editor(|editor, window, cx| {
+        editor.set_menu_edit_predictions_policy(MenuEditPredictionsPolicy::ByProvider);
+        editor.update_visible_edit_prediction(window, cx)
+    });
+
+    // The keybinding-derived modifier no longer reveals the preview.
+    cx.simulate_modifiers_change(Modifiers::alt());
+    cx.run_until_parked();
+    cx.editor(|editor, _, _| {
+        assert!(!editor.edit_prediction_preview_is_active());
+    });
+
+    // The configured modifier does.
+    cx.simulate_modifiers_change(Modifiers::control());
+    cx.run_until_parked();
+    cx.editor(|editor, _, _| {
+        assert!(editor.edit_prediction_preview_is_active());
+    });
+
+    // And it is reflected in the displayed keystroke.
+    let preview_keystroke = cx.update_editor(|editor, window, cx| {
+        editor
+            .preview_edit_prediction_keystroke(window, cx)
+            .expect("explicit preview modifier should produce a keystroke")
+    });
+    assert_eq!(preview_keystroke.modifiers(), &Modifiers::control());
+    assert_eq!(preview_keystroke.key(), "tab");
+}
+
+#[gpui::test]
+async fn test_edit_prediction_preview_accept_with_configured_modifier(
+    cx: &mut gpui::TestAppContext,
+) {
+    init_test(cx, |_| {});
+    load_default_keymap(cx);
+    update_test_language_settings(cx, &|settings| {
+        let edit_predictions = settings.edit_predictions.get_or_insert_default();
+        edit_predictions.mode = Some(EditPredictionsMode::Subtle);
+        edit_predictions.preview_modifier = Some(EditPredictionsPreviewModifier::Control);
+    });
+
+    let mut cx = EditorTestContext::new(cx).await;
+    let provider = cx.new(|_| FakeEditPredictionDelegate::default());
+    assign_editor_completion_provider(provider.clone(), &mut cx);
+    cx.set_state("let x = ˇ;");
+    propose_edits(&provider, vec![(8..8, "42")], &mut cx);
+    cx.update_editor(|editor, window, cx| {
+        editor.set_menu_edit_predictions_policy(MenuEditPredictionsPolicy::ByProvider);
+        editor.update_visible_edit_prediction(window, cx)
+    });
+
+    // Reveal the preview with the configured modifier, then accept with the
+    // configured modifier combined with the accept key.
+    cx.simulate_modifiers_change(Modifiers::control());
+    cx.run_until_parked();
+    cx.simulate_keystroke("ctrl-tab");
+    cx.run_until_parked();
+
+    cx.assert_editor_state("let x = 42ˇ;");
+}
+
+#[gpui::test]
+async fn test_edit_prediction_preview_released_on_blur(cx: &mut gpui::TestAppContext) {
+    init_test(cx, |_| {});
+    load_default_keymap(cx);
+    update_test_language_settings(cx, &|settings| {
+        settings.edit_predictions.get_or_insert_default().mode = Some(EditPredictionsMode::Subtle);
+    });
+
+    let mut cx = EditorTestContext::new(cx).await;
+    let provider = cx.new(|_| FakeEditPredictionDelegate::default());
+    assign_editor_completion_provider(provider.clone(), &mut cx);
+    cx.set_state("let x = ˇ;");
+    propose_edits(&provider, vec![(8..8, "42")], &mut cx);
+    cx.update_editor(|editor, window, cx| {
+        editor.set_menu_edit_predictions_policy(MenuEditPredictionsPolicy::ByProvider);
+        editor.update_visible_edit_prediction(window, cx)
+    });
+
+    let preview_modifiers = cx.update_editor(|editor, window, cx| {
+        *editor
+            .preview_edit_prediction_keystroke(window, cx)
+            .unwrap()
+            .modifiers()
+    });
+    cx.simulate_modifiers_change(preview_modifiers);
+    cx.run_until_parked();
+    cx.editor(|editor, _, _| {
+        assert!(editor.edit_prediction_preview_is_active());
+    });
+
+    // Blurring the editor should release the preview, so that a modifier release
+    // that happens while we are unfocused cannot leave it stuck on.
+    cx.update_editor(|editor, window, cx| editor.handle_blur(window, cx));
+    cx.editor(|editor, _, _| {
+        assert!(!editor.edit_prediction_preview_is_active());
     });
 }
 

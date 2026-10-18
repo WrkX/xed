@@ -58,6 +58,35 @@ Or directly via the UI through the status bar menu:
 
 > Note that edit prediction modes work with any prediction provider.
 
+### Configuring the Subtle Preview
+
+In `subtle` mode you can choose which modifier key reveals the preview, and whether
+it is revealed while the key is held or toggled on and off:
+
+```json [settings]
+"edit_predictions": {
+  "mode": "subtle",
+  // One of "auto", "control", "alt", or "command".
+  // "auto" uses the modifier of the keybinding that accepts edit predictions.
+  "preview_modifier": "control",
+  // One of "hold" or "toggle".
+  "preview_trigger": "toggle"
+},
+```
+
+With `"hold"` (the default), the preview is visible only while the modifier is
+held down. With `"toggle"`, pressing the modifier once shows the preview and
+pressing it again hides it. This is useful when the default `alt-tab` accept
+keybinding conflicts with a window switcher, or when holding a key is
+uncomfortable.
+
+Accepting a prediction revealed this way uses `<modifier>-tab` (the default `alt`
+modifier additionally supports `alt-l` on Linux and Windows). On macOS the
+`command` key cannot be used this way, because `cmd-tab` is reserved by the
+system for switching apps.
+
+Both options are also available from the edit prediction status bar menu.
+
 ## Default Key Bindings
 
 On all platforms, you can accept edit predictions with `alt-tab`. On Linux and Windows, `alt-tab` is often used by the system for switching windows, so `alt-l` is also bound as a default key binding for edit predictions on those platforms.
@@ -136,7 +165,7 @@ Alternatively, you can put the following in your `keymap.json`:
 ]
 ```
 
-In this case, because the binding contains the modifier `ctrl`, it will be used to preview the prediction in subtle mode, or when the completions menu is open.
+In this case, because the binding contains the modifier `ctrl`, it will be used to preview the prediction in subtle mode, or when the completions menu is open. To use a specific modifier for the preview instead, set `edit_predictions.preview_modifier`.
 
 ### Cleaning Up Older Keymap Entries
 

@@ -872,6 +872,18 @@
       "alt-j": "editor::AcceptNextLineEditPrediction",
     },
   },
+  // Accepts the edit prediction while its preview is shown, so that the
+  // keystroke works no matter which `edit_predictions.preview_modifier` is set.
+  // Scoped to subtle mode so it never shadows the eager-mode `tab` binding.
+  {
+    "context": "Editor && edit_prediction && edit_prediction_mode == subtle && edit_prediction_preview",
+    "use_key_equivalents": true,
+    "bindings": {
+      "tab": "editor::AcceptEditPredictionPreview",
+      "ctrl-tab": "editor::AcceptEditPredictionPreview",
+      "cmd-tab": "editor::AcceptEditPredictionPreview",
+    },
+  },
   {
     "context": "Editor && edit_prediction && edit_prediction_mode == eager && !showing_completions",
     "use_key_equivalents": true,

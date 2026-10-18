@@ -1151,8 +1151,8 @@
     // Default action when clicking a changed file in the Git panel.
     //
     // Choices: project_diff, file_diff, view_file
-    // Default: file_diff
-    "entry_primary_click_action": "file_diff",
+    // Default: view_file
+    "entry_primary_click_action": "view_file",
     // Whether the commit message editor is shown in the git panel by default.
     //
     // Choices: expanded, collapsed
@@ -1948,6 +1948,18 @@
     // 2. Display predictions inline only when holding a modifier key (alt by default).
     //     "mode": "subtle"
     "mode": "eager",
+    // The modifier key used to reveal the edit prediction preview in "subtle" mode.
+    // This setting takes four possible values:
+    // - "auto": use the modifier of the keybinding that accepts edit predictions.
+    // - "control"
+    // - "alt" (option on macOS)
+    // - "command" (the Windows or Super key on Linux and Windows)
+    "preview_modifier": "auto",
+    // How the preview modifier reveals the edit prediction preview in "subtle" mode.
+    // This setting takes two possible values:
+    // - "hold": show the preview while the modifier is held down.
+    // - "toggle": toggle the preview on and off each time the modifier is tapped.
+    "preview_trigger": "hold",
     // Copilot-specific settings
     // "copilot": {
     //   "proxy": "",
@@ -2032,6 +2044,8 @@
     // If the input has a timeout, a countdown is shown and hovering pauses it.
     // Its binding preview popover is disabled when "which_key.enabled" is true.
     "pending_keystrokes_indicator": true,
+    // Whether to show the edit prediction button in the status bar.
+    "edit_prediction_button": true,
   },
   // Settings specific to the terminal
   "terminal": {

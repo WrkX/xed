@@ -32,7 +32,7 @@ In the panel you can see the state of your project at a glance: which repository
 
 Zed monitors your repository so that changes you make on the command line are instantly reflected.
 
-By default, clicking a changed file opens a diff for that file. Select **View Diff** at the top of the Git Panel to open a Project Diff with all changed files. To change what a file click does, go to **Panels > Git Panel > Primary Click Behavior**.
+By default, clicking a changed file opens the file in the editor. Select **View Diff** at the top of the Git Panel to open a Project Diff with all changed files. To change what a file click does, go to **Panels > Git Panel > Primary Click Behavior**.
 
 ### Configuration
 

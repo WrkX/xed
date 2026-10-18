@@ -936,6 +936,62 @@ Set `[]` to clear the inherited list. Omit this setting to inherit it unchanged.
 
 Relative patterns are matched against paths relative to the worktree root. Absolute patterns are matched against absolute paths. A leading `~` is expanded to your home folder.
 
+### Preview Modifier
+
+- Description: The modifier key that reveals the edit prediction preview in `subtle` mode.
+- Setting: `edit_predictions.preview_modifier`
+- Default: `"auto"`
+
+**Options**
+
+1. Use the modifier of the keybinding that accepts edit predictions:
+
+```json [settings]
+{
+  "edit_predictions": {
+    "preview_modifier": "auto"
+  }
+}
+```
+
+2. Use a specific modifier key (`"control"`, `"alt"`, or `"command"`):
+
+```json [settings]
+{
+  "edit_predictions": {
+    "preview_modifier": "control"
+  }
+}
+```
+
+### Preview Trigger
+
+- Description: Whether the preview modifier reveals the edit prediction preview in `subtle` mode by being held down, or by being toggled on and off with a tap.
+- Setting: `edit_predictions.preview_trigger`
+- Default: `"hold"`
+
+**Options**
+
+1. Show the preview only while the modifier is held down:
+
+```json [settings]
+{
+  "edit_predictions": {
+    "preview_trigger": "hold"
+  }
+}
+```
+
+2. Toggle the preview on and off each time the modifier is tapped:
+
+```json [settings]
+{
+  "edit_predictions": {
+    "preview_trigger": "toggle"
+  }
+}
+```
+
 ### Prediction Debounce
 
 - Description: How long Zed waits after you stop typing before automatically requesting an edit prediction.
@@ -2096,7 +2152,8 @@ Positive `integer` value between 1 and 32. Values outside of this range will be 
     "cursor_position_button": true,
     "line_endings_button": false,
     "active_encoding_button": "non_utf8",
-    "pending_keystrokes_indicator": true
+    "pending_keystrokes_indicator": true,
+    "edit_prediction_button": true
   }
 }
 ```
@@ -2109,6 +2166,7 @@ Positive `integer` value between 1 and 32. Values outside of this range will be 
 - `line_endings_button`: Whether to show the active line endings button (clicking it opens the line-ending selector)
 - `active_encoding_button`: When to show the active encoding button: `"enabled"`, `"disabled"`, or `"non_utf8"` (only for encodings other than UTF-8 without BOM)
 - `pending_keystrokes_indicator`: Whether to show an indicator while multi-stroke input is pending. If the input has a timeout, a countdown is shown and hovering the indicator pauses it. Its binding preview popover is disabled when the which-key popup is enabled (see [key bindings](../key-bindings.md#precedence))
+- `edit_prediction_button`: Whether to show the edit prediction button (clicking it opens the edit prediction menu)
 
 There is an experimental setting that completely hides the status bar. This causes major usability problems (you will be unable to use many of Zed's features), but is provided for those who value screen real-estate above all else.
 
@@ -6141,7 +6199,7 @@ See the [debugger page](../debugger.md) for more information about debugging sup
     "show_count_badge": false,
     "diff_stats": true,
     "commit_title_max_length": 0,
-    "entry_primary_click_action": "file_diff"
+    "entry_primary_click_action": "view_file"
   }
 }
 ```

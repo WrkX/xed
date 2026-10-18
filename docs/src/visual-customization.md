@@ -374,7 +374,11 @@ TBD: Centered layout related settings
     // Unless the which-key menu is enabled, hovering also lists the bindings
     // that could still match.
     // Defaults to true.
-    "pending_keystrokes_indicator": true
+    "pending_keystrokes_indicator": true,
+    // Show/hide the edit prediction button in the status bar.
+    // Clicking the button brings up the edit prediction menu.
+    // Defaults to true.
+    "edit_prediction_button": true
   },
   "global_lsp_settings": {
     // Show/hide the LSP button in the status bar.

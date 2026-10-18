@@ -427,6 +427,9 @@ actions!(
     [
         /// Accepts the full edit prediction.
         AcceptEditPrediction,
+        /// Accepts the full edit prediction while its preview is shown, using the
+        /// configured preview modifier.
+        AcceptEditPredictionPreview,
         /// Amends the editor text with hint's edit (if sent).
         AcceptInlayHint,
         /// Accepts a partial edit prediction.
