@@ -58,6 +58,199 @@ use super::*;
 
 const DATA_RETENTION_LEARN_MORE_URL: &str = "https://support.claude.com/en/articles/15425996-data-retention-practices-for-mythos-class-models";
 
+// Shown in place of a thought's contents while it streams and its block is
+// collapsed. One word is picked per block, keeping the header feeling alive
+// without revealing the (potentially noisy) reasoning text.
+const THINKING_WORDS: &[&str] = &[
+    "Accomplishing",
+    "Actioning",
+    "Actualizing",
+    "Architecting",
+    "Baking",
+    "Beaming",
+    "Beboppin'",
+    "Befuddling",
+    "Billowing",
+    "Blanching",
+    "Bloviating",
+    "Boogieing",
+    "Boondoggling",
+    "Booping",
+    "Bootstrapping",
+    "Brewing",
+    "Bunning",
+    "Burrowing",
+    "Calculating",
+    "Canoodling",
+    "Caramelizing",
+    "Cascading",
+    "Catapulting",
+    "Cerebrating",
+    "Channeling",
+    "Channelling",
+    "Choreographing",
+    "Churning",
+    "Clauding",
+    "Coalescing",
+    "Cogitating",
+    "Combobulating",
+    "Composing",
+    "Computing",
+    "Concocting",
+    "Considering",
+    "Contemplating",
+    "Cooking",
+    "Crafting",
+    "Creating",
+    "Crunching",
+    "Crystallizing",
+    "Cultivating",
+    "Deciphering",
+    "Deliberating",
+    "Determining",
+    "Dilly-dallying",
+    "Discombobulating",
+    "Doing",
+    "Doodling",
+    "Drizzling",
+    "Ebbing",
+    "Effecting",
+    "Elucidating",
+    "Embellishing",
+    "Enchanting",
+    "Envisioning",
+    "Evaporating",
+    "Fermenting",
+    "Fiddle-faddling",
+    "Finagling",
+    "Flambéing",
+    "Flibbertigibbeting",
+    "Flowing",
+    "Flummoxing",
+    "Fluttering",
+    "Forging",
+    "Forming",
+    "Frolicking",
+    "Frosting",
+    "Gallivanting",
+    "Galloping",
+    "Garnishing",
+    "Generating",
+    "Gesticulating",
+    "Germinating",
+    "Gitifying",
+    "Grooving",
+    "Gusting",
+    "Harmonizing",
+    "Hashing",
+    "Hatching",
+    "Herding",
+    "Honking",
+    "Hullaballooing",
+    "Hyperspacing",
+    "Ideating",
+    "Imagining",
+    "Improvising",
+    "Incubating",
+    "Inferring",
+    "Infusing",
+    "Ionizing",
+    "Jitterbugging",
+    "Julienning",
+    "Kneading",
+    "Leavening",
+    "Levitating",
+    "Lollygagging",
+    "Manifesting",
+    "Marinating",
+    "Meandering",
+    "Metamorphosing",
+    "Misting",
+    "Moonwalking",
+    "Moseying",
+    "Mulling",
+    "Mustering",
+    "Musing",
+    "Nebulizing",
+    "Nesting",
+    "Newspapering",
+    "Noodling",
+    "Nucleating",
+    "Orbiting",
+    "Orchestrating",
+    "Osmosing",
+    "Perambulating",
+    "Percolating",
+    "Perusing",
+    "Philosophising",
+    "Photosynthesizing",
+    "Pollinating",
+    "Pondering",
+    "Pontificating",
+    "Pouncing",
+    "Precipitating",
+    "Prestidigitating",
+    "Processing",
+    "Proofing",
+    "Propagating",
+    "Puttering",
+    "Puzzling",
+    "Quantumizing",
+    "Razzle-dazzling",
+    "Razzmatazzing",
+    "Recombobulating",
+    "Reticulating",
+    "Roosting",
+    "Ruminating",
+    "Sautéing",
+    "Scampering",
+    "Schlepping",
+    "Scurrying",
+    "Seasoning",
+    "Shenaniganing",
+    "Shimmying",
+    "Simmering",
+    "Skedaddling",
+    "Sketching",
+    "Slithering",
+    "Smooshing",
+    "Sock-hopping",
+    "Spelunking",
+    "Spinning",
+    "Sprouting",
+    "Stewing",
+    "Sublimating",
+    "Swirling",
+    "Swooping",
+    "Symbioting",
+    "Synthesizing",
+    "Tempering",
+    "Thinking",
+    "Thundering",
+    "Tinkering",
+    "Tomfoolering",
+    "Topsy-turvying",
+    "Transfiguring",
+    "Transmuting",
+    "Twisting",
+    "Undulating",
+    "Unfurling",
+    "Unravelling",
+    "Vibing",
+    "Waddling",
+    "Wandering",
+    "Warping",
+    "Whatchamacalliting",
+    "Whirlpooling",
+    "Whirring",
+    "Whisking",
+    "Wibbling",
+    "Working",
+    "Wrangling",
+    "Zesting",
+    "Zigzagging",
+];
+
 fn tool_heading_name(tool: &ToolCall) -> Option<&'static str> {
     Some(match tool.kind() {
         acp_v2::ToolKind::Read => "Read",
@@ -8893,6 +9086,31 @@ impl ThreadView {
         )
     }
 
+    /// Renders the animated "thinking" indicator shown in the header of a
+    /// thought block while it streams with its contents hidden.
+    fn render_thinking_indicator(
+        &self,
+        entry_ix: usize,
+        chunk_ix: usize,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        // Pick a single word per block so it stays stable for the duration of the
+        // thought, while still varying between blocks.
+        let index = (entry_ix.wrapping_mul(31).wrapping_add(chunk_ix)) % THINKING_WORDS.len();
+
+        h_flex()
+            .gap_1()
+            .items_center()
+            .text_color(cx.theme().colors().text_muted)
+            .child(SpinnerLabel::with_variant(SpinnerVariant::DotsVariant).size(LabelSize::XSmall))
+            .child(
+                Label::new(format!("{}…", THINKING_WORDS[index]))
+                    .size(LabelSize::XSmall)
+                    .color(Color::Muted),
+            )
+            .into_any_element()
+    }
+
     fn render_thinking_block(
         &self,
         entry_ix: usize,
@@ -8909,8 +9127,16 @@ impl ThreadView {
         let entry_view_state = self.entry_view_state.read(cx);
         let (is_open, is_constrained) = entry_view_state.thinking_block_state(key, cx);
         let should_auto_scroll = entry_view_state.is_auto_expanded_thinking_block(key);
-        let is_streaming = self.thread.read(cx).status() == ThreadStatus::Generating
-            && self.thread.read(cx).entries().len() == entry_ix + 1;
+        let thread = self.thread.read(cx);
+        // Only treat the block as streaming while its chunk is the one currently
+        // being appended; earlier thoughts in the same entry have already finished.
+        let is_streaming = thread.status() == ThreadStatus::Generating
+            && thread.entries().len() == entry_ix + 1
+            && matches!(
+                thread.entries().get(entry_ix),
+                Some(AgentThreadEntry::AssistantMessage(message))
+                    if message.chunks.len() == chunk_ix + 1
+            );
         let scroll_handle = entry_view_state
             .entry(entry_ix)
             .and_then(|entry| entry.scroll_handle_for_assistant_message_chunk(chunk_ix));
@@ -8935,8 +9161,10 @@ impl ThreadView {
                     .cursor_pointer()
                     .pr_1()
                     .justify_between()
-                    .child(
-                        h_flex().h_5().gap_1().overflow_hidden().child(
+                    .child(h_flex().h_5().gap_1().overflow_hidden().child(
+                        if is_streaming && !is_open {
+                            self.render_thinking_indicator(entry_ix, chunk_ix, cx)
+                        } else {
                             div()
                                 .text_size(rems_from_px(11_f32))
                                 .text_color(cx.theme().colors().text_muted)
@@ -8944,9 +9172,10 @@ impl ThreadView {
                                     "Thinking…"
                                 } else {
                                     "Thoughts"
-                                }),
-                        ),
-                    )
+                                })
+                                .into_any_element()
+                        },
+                    ))
                     .child(
                         Disclosure::new(("expand", entry_ix), is_open)
                             .opened_icon(IconName::ChevronUp)

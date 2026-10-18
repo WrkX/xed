@@ -10750,6 +10750,119 @@ pub(crate) mod tests {
         }
     }
 
+    async fn setup_streaming_thought<'a>(
+        thinking_display: &str,
+        cx: &'a mut TestAppContext,
+    ) -> (
+        Entity<ConversationView>,
+        Entity<ThreadView>,
+        &'a mut VisualTestContext,
+    ) {
+        init_test(cx);
+        cx.update(|cx| {
+            cx.update_global::<SettingsStore, _>(|store, cx| {
+                store
+                    .set_user_settings(
+                        &format!(
+                            r#"{{ "agent": {{ "thinking_display": "{thinking_display}" }} }}"#
+                        ),
+                        cx,
+                    )
+                    .expect("thinking display settings");
+            });
+        });
+
+        let connection = StubAgentConnection::new();
+        let (conversation_view, cx) =
+            setup_conversation_view(StubAgentServer::new(connection.clone()), cx).await;
+        add_to_workspace(conversation_view.clone(), cx);
+
+        let editor = message_editor(&conversation_view, cx);
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_text("Think this through", window, cx);
+        });
+        let thread_view = active_thread(&conversation_view, cx);
+        thread_view.update_in(cx, |view, window, cx| view.send(window, cx));
+        cx.run_until_parked();
+
+        let thread = thread_view.read_with(cx, |view, _| view.thread.clone());
+        let session_id = thread.read_with(cx, |thread, _| thread.session_id().clone());
+
+        cx.update(|_, cx| {
+            connection.send_update(
+                session_id.clone(),
+                acp_v1::SessionUpdate::AgentThoughtChunk(acp_v1::ContentChunk::new(
+                    "Hidden papaya reasoning.".into(),
+                )),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        // The first chunk creates the entry (`NewEntry`); a follow-up chunk emits
+        // `EntryUpdated`, which is what drives auto-expansion for `auto`.
+        cx.update(|_, cx| {
+            connection.send_update(
+                session_id,
+                acp_v1::SessionUpdate::AgentThoughtChunk(acp_v1::ContentChunk::new(
+                    " Hidden papaya reasoning, continued.".into(),
+                )),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        (conversation_view, thread_view, cx)
+    }
+
+    #[gpui::test]
+    async fn test_always_collapsed_hides_streaming_thought(cx: &mut TestAppContext) {
+        let (_conversation_view, thread_view, cx) =
+            setup_streaming_thought("always_collapsed", cx).await;
+
+        thread_view.read_with(cx, |view, cx| {
+            assert_eq!(view.thread.read(cx).status(), ThreadStatus::Generating);
+            assert_eq!(
+                view.entry_view_state
+                    .read(cx)
+                    .thinking_block_state((1, 0), cx),
+                (false, false),
+                "a streaming thought must stay collapsed under `always_collapsed`",
+            );
+        });
+
+        // The user can still expand the block while it streams.
+        thread_view.update(cx, |view, cx| {
+            view.entry_view_state.update(cx, |state, cx| {
+                state.toggle_thinking_block_expansion((1, 0), cx);
+            });
+        });
+        thread_view.read_with(cx, |view, cx| {
+            assert_eq!(
+                view.entry_view_state
+                    .read(cx)
+                    .thinking_block_state((1, 0), cx),
+                (true, false),
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_auto_expands_streaming_thought(cx: &mut TestAppContext) {
+        let (_conversation_view, thread_view, cx) = setup_streaming_thought("auto", cx).await;
+
+        thread_view.read_with(cx, |view, cx| {
+            assert_eq!(view.thread.read(cx).status(), ThreadStatus::Generating);
+            assert_eq!(
+                view.entry_view_state
+                    .read(cx)
+                    .thinking_block_state((1, 0), cx),
+                (true, false),
+                "`auto` must expand a thought while it streams",
+            );
+        });
+    }
+
     #[gpui::test]
     async fn test_message_context_menu_copies_selected_content(cx: &mut TestAppContext) {
         init_test(cx);

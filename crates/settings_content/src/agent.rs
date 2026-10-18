@@ -111,7 +111,6 @@ pub enum SidebarSide {
 pub enum ThinkingBlockDisplay {
     /// Thinking blocks fully expand during streaming, then auto-collapse
     /// when the model finishes thinking. Users can re-expand after collapse.
-    #[default]
     Auto,
     /// Thinking blocks auto-expand with a height constraint during streaming,
     /// then remain in their constrained state when complete. Users can click
@@ -119,7 +118,10 @@ pub enum ThinkingBlockDisplay {
     Preview,
     /// Thinking blocks are always fully expanded by default (no height constraint).
     AlwaysExpanded,
-    /// Thinking blocks are always collapsed by default.
+    /// Thinking blocks are always collapsed by default. While a thought streams,
+    /// an animated "thinking" indicator stands in for its contents; users can
+    /// expand the block at any time.
+    #[default]
     AlwaysCollapsed,
 }
 

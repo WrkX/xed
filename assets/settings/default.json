@@ -1392,8 +1392,8 @@
     "terminal_init_command": "",
     // How thinking blocks should be displayed by default in the agent panel.
     //
-    // Default: auto
-    "thinking_display": "auto",
+    // Default: always_collapsed
+    "thinking_display": "always_collapsed",
     // Whether clicking the stop button on a running terminal tool should also cancel the agent's generation.
     // Note that this only applies to the stop button, not to ctrl+c inside the terminal.
     //

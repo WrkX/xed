@@ -9211,7 +9211,7 @@ fn ai_page(cx: &App) -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Thinking Display",
-                description: "How thinking blocks should be displayed by default. 'Auto' fully expands during streaming, then auto-collapses when done. 'Preview' auto-expands with a height constraint during streaming. 'Always Expanded' shows full content. 'Always Collapsed' keeps them collapsed.",
+                description: "How thinking blocks should be displayed by default. 'Always Collapsed' (the default) keeps them collapsed, showing an animated 'thinking' indicator while a thought streams, and lets you expand on demand. 'Auto' fully expands during streaming, then auto-collapses when done. 'Preview' auto-expands with a height constraint during streaming. 'Always Expanded' shows full content.",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("agent.thinking_display"),
