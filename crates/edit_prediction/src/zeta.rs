@@ -75,6 +75,11 @@ pub(crate) fn request_prediction_with_zeta(
 
     let local_transport = (provider == settings::EditPredictionProvider::LocalGguf)
         .then(|| local_gguf_transport(settings.local_gguf.clone(), cx));
+    let local_prompt_format = local_transport.as_ref().map(|_| {
+        crate::local_gguf_models::prompt_format_for_model_path(
+            settings.local_gguf.model_path.as_deref(),
+        )
+    });
     let http_client = cx.http_client();
     let request_start = cx.background_executor().now();
     let raw_config = if local_transport.is_some() {
@@ -118,10 +123,12 @@ pub(crate) fn request_prediction_with_zeta(
     let project_for_request = project.clone();
     let request_task = cx.background_spawn({
         async move {
-            let local_zeta_version = if local_transport.is_some() {
-                ZetaVersion::Zeta2_1
-            } else {
-                custom_server_settings
+            let local_zeta_version = match local_prompt_format {
+                Some(EditPredictionPromptFormat::Zeta(version)) => version,
+                // The local Zeta path is only reachable for Zeta-format models;
+                // keep the newest supported version as the fallback.
+                Some(_) => ZetaVersion::Zeta2_1,
+                None => custom_server_settings
                     .as_ref()
                     .and_then(|settings| match settings.prompt_format {
                         EditPredictionPromptFormat::Zeta(version) => Some(version),
@@ -135,7 +142,7 @@ pub(crate) fn request_prediction_with_zeta(
                         }
                         _ => None,
                     })
-                    .unwrap_or_default()
+                    .unwrap_or_default(),
             };
             let zeta_format = raw_config
                 .as_ref()

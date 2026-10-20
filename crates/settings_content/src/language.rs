@@ -339,7 +339,7 @@ pub struct LocalGgufEditPredictionSettingsContent {
     pub model_path: Option<String>,
     /// Maximum tokens to generate for each prediction.
     ///
-    /// Default: 64
+    /// Default: 256
     pub max_output_tokens: Option<u32>,
     /// The debounce delay in milliseconds before automatically requesting a prediction
     /// after typing stops. Set to 0 to request predictions immediately.

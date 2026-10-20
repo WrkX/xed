@@ -81,6 +81,42 @@ fn test_model_path() -> Option<PathBuf> {
     std::env::var_os("LOCAL_GGUF_TEST_MODEL").map(PathBuf::from)
 }
 
+/// `</s>` tokenizes to `</`, `s`, `>` in Qwen-family vocabularies. Those
+/// sub-token ids must not be used as stop ids, or generation stops on ordinary
+/// code containing `s` or `>`.
+#[test]
+fn multi_token_stop_sequence_does_not_change_generation() -> Result<(), Box<dyn std::error::Error>>
+{
+    let Some(model_path) = test_model_path() else {
+        eprintln!("LOCAL_GGUF_TEST_MODEL is not set; skipping the stop-sequence test");
+        return Ok(());
+    };
+
+    smol::block_on(async {
+        let engine = LocalGgufEngine::new();
+        engine.load(model_path, 2048).await?;
+
+        let prompt = "fn main() {\n    let x = 1;\n    println!(\"{}\", x);\n}\n".to_string();
+        let with_stop = engine
+            .complete(
+                prompt.clone(),
+                vec!["</s>".to_string()],
+                64,
+                CancellationToken::new(),
+            )
+            .await?;
+        let without_stop = engine
+            .complete(prompt, Vec::new(), 64, CancellationToken::new())
+            .await?;
+
+        assert_eq!(
+            with_stop.text, without_stop.text,
+            "a multi-token stop sequence must only match its full text"
+        );
+        Ok(())
+    })
+}
+
 #[test]
 fn missing_model_reports_model_not_found() -> Result<(), Box<dyn std::error::Error>> {
     smol::block_on(async {

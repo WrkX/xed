@@ -2004,7 +2004,7 @@
     // Settings specific to the on-device Local GGUF provider.
     "local_gguf": {
       "model_path": null,
-      "max_output_tokens": 64,
+      "max_output_tokens": 256,
       "prediction_debounce": 250,
     },
     // Controls whether Zed may collect training data when using Zed's Edit Predictions.

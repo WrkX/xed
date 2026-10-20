@@ -152,9 +152,63 @@ pub const MODEL_CATALOG: [LocalGgufModelPin; 4] =
     [SMALL_MODEL, RECOMMENDED_MODEL, SWEEP_MODEL, ZETA_MODEL];
 
 pub fn prompt_format_for_model_path(path: Option<&Path>) -> EditPredictionPromptFormat {
-    path.and_then(pin_for_file_name)
+    let Some(path) = path else {
+        return EditPredictionPromptFormat::Qwen;
+    };
+
+    pin_for_file_name(path)
         .map(|pin| pin.prompt_format)
+        .or_else(|| infer_prompt_format_from_file_name(path))
         .unwrap_or(EditPredictionPromptFormat::Qwen)
+}
+
+/// Infers the prompt format of an imported model from its file name.
+///
+/// Models installed from [`MODEL_CATALOG`] are matched by exact file name. Users
+/// can also import any GGUF file, so a model whose file name mentions its family
+/// (for example `codestral-22b-v0.1.Q4_K_M.gguf`) gets the matching FIM markers
+/// instead of being treated as a Qwen model by default.
+fn infer_prompt_format_from_file_name(path: &Path) -> Option<EditPredictionPromptFormat> {
+    let file_name = path.file_stem()?.to_str()?.to_ascii_lowercase();
+
+    Some(if file_name.contains("sweep-next-edit") {
+        EditPredictionPromptFormat::Sweep
+    } else if file_name.contains("zeta2.1") || file_name.contains("zeta-2.1") {
+        EditPredictionPromptFormat::Zeta(ZetaVersion::Zeta2_1)
+    } else if file_name.contains("zeta2") || file_name.contains("zeta-2") {
+        EditPredictionPromptFormat::Zeta(ZetaVersion::Zeta2)
+    } else if file_name.contains("codellama") || file_name.contains("code-llama") {
+        EditPredictionPromptFormat::CodeLlama
+    } else if file_name.contains("starcoder") {
+        EditPredictionPromptFormat::StarCoder
+    } else if file_name.contains("deepseek-coder") {
+        EditPredictionPromptFormat::DeepseekCoder
+    } else if file_name.contains("codestral") {
+        EditPredictionPromptFormat::Codestral
+    } else if file_name.contains("codegemma") {
+        EditPredictionPromptFormat::CodeGemma
+    } else if file_name.contains("glm") {
+        EditPredictionPromptFormat::Glm
+    } else if file_name.contains("qwen") {
+        EditPredictionPromptFormat::Qwen
+    } else {
+        return None;
+    })
+}
+
+/// The output-token budget that suits a prompt format.
+///
+/// Next-edit models rewrite an entire window of code, so they need far more
+/// output than a fill-in-the-middle model, which only completes the gap at the
+/// cursor. A truncated next-edit rewrite is discarded by the provider.
+///
+/// This is the value written when a model is selected, not a hard limit: the
+/// `max_output_tokens` setting is honored as-is for every request.
+pub(crate) fn max_output_tokens_for_format(format: EditPredictionPromptFormat) -> u32 {
+    match format {
+        EditPredictionPromptFormat::Sweep | EditPredictionPromptFormat::Zeta(_) => 512,
+        _ => 256,
+    }
 }
 
 /// The catalog entry whose file name matches `path`, if any.
@@ -508,14 +562,23 @@ impl LocalGgufModelManager {
                 .get_or_insert_default()
                 .local_gguf
                 .get_or_insert_default();
-            if let Some(pin) = value
+            let new_format = value
                 .as_deref()
-                .and_then(|path| pin_for_file_name(Path::new(path)))
-            {
-                local_settings.max_output_tokens = Some(match pin.prompt_format {
-                    EditPredictionPromptFormat::Sweep | EditPredictionPromptFormat::Zeta(_) => 512,
-                    _ => 64,
-                });
+                .map(|path| prompt_format_for_model_path(Some(Path::new(path))));
+            let previous_format = local_settings
+                .model_path
+                .as_deref()
+                .map(|path| prompt_format_for_model_path(Some(Path::new(path))));
+
+            // Write the budget that suits the inferred prompt format when the
+            // format changes, so an imported next-edit model (which rewrites a
+            // whole window) gets its larger budget and a FIM model does not
+            // inherit a stale one. A budget the user tuned for the same format
+            // is preserved.
+            if let Some(format) = new_format {
+                if new_format != previous_format || local_settings.max_output_tokens.is_none() {
+                    local_settings.max_output_tokens = Some(max_output_tokens_for_format(format));
+                }
             }
             local_settings.model_path = value;
         });
@@ -1161,6 +1224,80 @@ mod tests {
         );
         assert!(pin_for_file_name(Path::new("/models/gguf/custom.gguf")).is_none());
         assert!(pin_for_file_name(Path::new("/models/gguf")).is_none());
+    }
+
+    #[test]
+    fn prompt_format_is_inferred_from_imported_file_names() {
+        for (file_name, expected) in [
+            (
+                "qwen2.5-coder-7b-instruct-Q4_K_M.gguf",
+                EditPredictionPromptFormat::Qwen,
+            ),
+            (
+                "codestral-22b-v0.1.Q4_K_M.gguf",
+                EditPredictionPromptFormat::Codestral,
+            ),
+            (
+                "deepseek-coder-6.7b-instruct-Q5_K_M.gguf",
+                EditPredictionPromptFormat::DeepseekCoder,
+            ),
+            (
+                "starcoder2-3b-Q8_0.gguf",
+                EditPredictionPromptFormat::StarCoder,
+            ),
+            (
+                "CodeLlama-7B-Q4_K_M.gguf",
+                EditPredictionPromptFormat::CodeLlama,
+            ),
+            (
+                "codegemma-7b-Q4_K_M.gguf",
+                EditPredictionPromptFormat::CodeGemma,
+            ),
+            ("glm-4-9b-Q4_K_M.gguf", EditPredictionPromptFormat::Glm),
+            (
+                "zeta-2.1-Q4_K_M.gguf",
+                EditPredictionPromptFormat::Zeta(ZetaVersion::Zeta2_1),
+            ),
+            (
+                "my-sweep-next-edit-v1.gguf",
+                EditPredictionPromptFormat::Sweep,
+            ),
+        ] {
+            let path = Path::new("/models/gguf").join(file_name);
+            assert_eq!(
+                prompt_format_for_model_path(Some(&path)),
+                expected,
+                "{file_name}"
+            );
+        }
+
+        // Unknown families keep the Qwen default rather than failing to load.
+        assert_eq!(
+            prompt_format_for_model_path(Some(Path::new("/models/llama-3-8b.gguf"))),
+            EditPredictionPromptFormat::Qwen
+        );
+    }
+
+    #[test]
+    fn output_cap_follows_the_inferred_prompt_format() {
+        assert_eq!(
+            max_output_tokens_for_format(prompt_format_for_model_path(Some(Path::new(
+                "/models/imported/my-sweep-next-edit-v1.gguf"
+            )))),
+            512
+        );
+        assert_eq!(
+            max_output_tokens_for_format(prompt_format_for_model_path(Some(Path::new(
+                "/models/imported/zeta-2.1-Q4_K_M.gguf"
+            )))),
+            512
+        );
+        assert_eq!(
+            max_output_tokens_for_format(prompt_format_for_model_path(Some(Path::new(
+                "/models/gguf/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"
+            )))),
+            256
+        );
     }
 
     use fs::FakeFs;

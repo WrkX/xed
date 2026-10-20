@@ -7940,7 +7940,9 @@ pub(crate) mod tests {
     }
 
     #[gpui::test]
-    async fn test_pinned_prompt_tracks_scroll_position(cx: &mut TestAppContext) {
+    async fn test_pinned_prompt_tracks_scroll_and_hides_for_visible_newer_prompt(
+        cx: &mut TestAppContext,
+    ) {
         init_test(cx);
         let connection = StubAgentConnection::new();
         // Long responses make the transcript scrollable so each prompt can be
@@ -7969,12 +7971,13 @@ pub(crate) mod tests {
         let thread_view = active_thread(&conversation_view, cx);
         let scroll_to = |thread_view: &Entity<ThreadView>,
                          item_ix: usize,
+                         offset_in_item: f32,
                          cx: &mut VisualTestContext| {
             thread_view.update_in(cx, |view, window, cx| {
                 view.focus_handle.focus(window, cx);
                 view.list_state.scroll_to(ListOffset {
                     item_ix,
-                    offset_in_item: px(0.),
+                    offset_in_item: px(offset_in_item),
                 });
                 cx.notify();
             });
@@ -7985,7 +7988,7 @@ pub(crate) mod tests {
         // With an answer at the top of the viewport, the preceding prompt is
         // pinned, and clicking it jumps to that prompt rather than the latest one.
         for (top_ix, prompt_ix) in [(1usize, 0usize), (3, 2), (5, 4)] {
-            scroll_to(&thread_view, top_ix, cx);
+            scroll_to(&thread_view, top_ix, 0., cx);
             let pinned = cx.debug_bounds("pinned-latest-prompt").unwrap_or_else(|| {
                 panic!("expected a pinned prompt once item {top_ix} owns the viewport")
             });
@@ -8003,12 +8006,43 @@ pub(crate) mod tests {
         // When the prompt itself sits at the top of the viewport it is visible,
         // so nothing is pinned over it.
         for top_ix in [0usize, 2, 4] {
-            scroll_to(&thread_view, top_ix, cx);
+            scroll_to(&thread_view, top_ix, 0., cx);
             assert!(
                 cx.debug_bounds("pinned-latest-prompt").is_none(),
                 "no pinned prompt expected while the prompt at item {top_ix} is visible"
             );
         }
+
+        // Scroll into the first answer far enough that the next prompt comes
+        // into view. The first prompt is above the viewport, but pinning it
+        // would show two user messages at once, so nothing is pinned.
+        scroll_to(&thread_view, 1, 0., cx);
+        let (answer_height, viewport_height) = thread_view.read_with(cx, |view, _| {
+            (
+                view.list_state
+                    .bounds_for_item(1)
+                    .expect("answer layout")
+                    .size
+                    .height,
+                view.list_state.viewport_bounds().size.height,
+            )
+        });
+        let offset = (answer_height - viewport_height * 0.5).max(px(1.));
+        scroll_to(&thread_view, 1, offset.into(), cx);
+        thread_view.read_with(cx, |view, _| {
+            assert_eq!(view.list_state.logical_scroll_top().item_ix, 1);
+            assert_eq!(view.list_state.item_is_above_viewport(0), Some(true));
+            assert_eq!(
+                view.list_state.item_is_above_viewport(2),
+                Some(false),
+                "the next prompt should be visible"
+            );
+            assert_eq!(view.list_state.item_is_below_viewport(2), Some(false));
+        });
+        assert!(
+            cx.debug_bounds("pinned-latest-prompt").is_none(),
+            "no pinned prompt expected while the next prompt is visible"
+        );
     }
 
     #[gpui::test]

@@ -67,6 +67,11 @@ pub(crate) async fn complete(
         ));
     };
 
+    let max_output_tokens = settings.max_output_tokens;
+    if max_output_tokens == 0 {
+        return Ok(None);
+    }
+
     let engine = shared_engine();
     let prompt_format = crate::local_gguf_models::prompt_format_for_model_path(Some(model_path));
     let is_next_edit = matches!(
@@ -89,21 +94,27 @@ pub(crate) async fn complete(
         })?;
 
     let completion = engine
-        .complete(
-            prompt,
-            stop_tokens,
-            settings.max_output_tokens,
-            cancellation,
-        )
+        .complete(prompt, stop_tokens, max_output_tokens, cancellation)
         .await?;
 
     if completion.stop == CompletionStop::Cancelled {
         return Ok(None);
     }
-    // A partial rewrite would delete the ungenerated tail of the editable region.
-    if is_next_edit && completion.stop == CompletionStop::MaxTokens {
-        log::debug!("local gguf: discarding a truncated next-edit prediction");
-        return Ok(None);
+
+    let mut text = completion.text;
+    if completion.stop == CompletionStop::MaxTokens {
+        // A partial rewrite would delete the ungenerated tail of the editable
+        // region.
+        if is_next_edit {
+            log::debug!("local gguf: discarding a truncated next-edit prediction");
+            return Ok(None);
+        }
+        // FIM predictions often end mid-line when they hit the output limit.
+        // Keeping only complete lines avoids inserting half a statement.
+        if !truncate_incomplete_line(&mut text) {
+            log::debug!("local gguf: discarding a truncated single-line prediction");
+            return Ok(None);
+        }
     }
 
     log::debug!(
@@ -113,9 +124,21 @@ pub(crate) async fn complete(
     );
 
     Ok(Some((
-        completion.text,
+        text,
         format!("local-gguf-{}", completion.generation),
     )))
+}
+
+/// Keeps only the complete lines of a completion that hit the output limit.
+///
+/// Returns `false` when there is no complete line to keep, so the caller can
+/// drop the prediction instead of inserting a fragment.
+fn truncate_incomplete_line(text: &mut String) -> bool {
+    let Some(last_newline) = text.rfind('\n') else {
+        return false;
+    };
+    text.truncate(last_newline + 1);
+    true
 }
 
 /// Runs one bounded completion to check that the configured
@@ -203,6 +226,20 @@ mod tests {
         // No engine has been created in this process, so this must not spawn a
         // worker or panic.
         unload();
+    }
+
+    #[test]
+    fn truncated_fim_completion_keeps_complete_lines() {
+        let mut text = "    let x = 1;\n    let y =".to_string();
+        assert!(truncate_incomplete_line(&mut text));
+        assert_eq!(text, "    let x = 1;\n");
+
+        let mut ends_with_newline = "    let x = 1;\n".to_string();
+        assert!(truncate_incomplete_line(&mut ends_with_newline));
+        assert_eq!(ends_with_newline, "    let x = 1;\n");
+
+        let mut single_line = "    let y =".to_string();
+        assert!(!truncate_incomplete_line(&mut single_line));
     }
 
     #[test]

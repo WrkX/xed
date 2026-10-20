@@ -7533,7 +7533,7 @@ impl ThreadView {
     /// The user message that owns the region currently at the top of the
     /// viewport: the most recent non-indented user message at or above the
     /// topmost visible entry. This lets the pinned prompt track the transcript
-    /// as the user scrolls instead of always pointing at the latest prompt.
+    /// as the user scrolls.
     fn active_user_message_index(&self, cx: &App) -> Option<usize> {
         let entries = self.thread.read(cx).entries();
         let top_ix = self.list_state.logical_scroll_top().item_ix;
@@ -7549,8 +7549,23 @@ impl ThreadView {
         if self.list_state.item_is_above_viewport(index) != Some(true) {
             return None;
         }
-        let AgentThreadEntry::UserMessage(message) = self.thread.read(cx).entries().get(index)?
-        else {
+        let entries = self.thread.read(cx).entries();
+        // The pin stands in for a prompt that scrolled off the top, so it must
+        // not compete with a newer user message that is still on screen.
+        let newer_user_message_visible =
+            entries
+                .iter()
+                .enumerate()
+                .skip(index + 1)
+                .any(|(ix, entry)| {
+                    matches!(entry, AgentThreadEntry::UserMessage(message) if !message.indented)
+                        && self.list_state.item_is_above_viewport(ix) == Some(false)
+                        && self.list_state.item_is_below_viewport(ix) == Some(false)
+                });
+        if newer_user_message_visible {
+            return None;
+        }
+        let AgentThreadEntry::UserMessage(message) = entries.get(index)? else {
             return None;
         };
         let preview = prompt_preview(&message.content);
