@@ -380,7 +380,7 @@ actions!(
         ToggleThinkingMode,
         /// Cycles through available thinking effort levels for the current model.
         CycleThinkingEffort,
-        /// Toggles the thinking effort selector menu open or closed.
+        /// Opens the tool approvals menu, which also hosts thinking effort.
         ToggleThinkingEffortMenu,
         /// Toggles fast mode for models that support it.
         ToggleFastMode,

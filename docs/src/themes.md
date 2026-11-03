@@ -6,7 +6,7 @@ description: Browse, install, and create themes for Zed. Includes built-in theme
 # Themes
 
 Zed comes with a number of built-in themes, with more themes available as extensions.
-Cursor is a built-in dark theme based on the Cursor Dark palette, with gray comments and agent shell commands.
+Racoon is a built-in dark theme based on the Cursor Dark palette, with gray comments and agent shell commands.
 
 ## Selecting a Theme
 
@@ -40,7 +40,7 @@ You can set the mode to `"dark"` or `"light"` to ignore the current system mode.
   "theme": {
     "mode": "system",
     "light": "One Light",
-    "dark": "One Dark"
+    "dark": "Racoon"
   }
 }
 ```
@@ -64,7 +64,7 @@ the first toggle converts it to dynamic theme selection with default themes:
   "theme": {
     "mode": "system",
     "light": "One Light",
-    "dark": "One Dark"
+    "dark": "Racoon"
   }
 }
 ```

@@ -322,12 +322,14 @@ impl Component for ThemePreviewTile {
     fn preview(_window: &mut Window, cx: &mut App) -> AnyElement {
         let theme_registry = ThemeRegistry::global(cx);
 
+        let racoon = theme_registry.get("Racoon");
         let one_dark = theme_registry.get("One Dark");
         let one_light = theme_registry.get("One Light");
         let gruvbox_dark = theme_registry.get("Gruvbox Dark");
         let gruvbox_light = theme_registry.get("Gruvbox Light");
 
         let themes_to_preview = vec![
+            racoon.clone().ok(),
             one_dark.clone().ok(),
             one_light.ok(),
             gruvbox_dark.ok(),
@@ -341,13 +343,13 @@ impl Component for ThemePreviewTile {
             .gap_6()
             .p_4()
             .children({
-                if let Some(one_dark) = one_dark.ok() {
+                if let Some(racoon) = racoon.ok() {
                     vec![example_group(vec![single_example(
                         "Default",
                         div()
                             .w(px(240.))
                             .h(px(180.))
-                            .child(ThemePreviewTile::new(one_dark, 0.42))
+                            .child(ThemePreviewTile::new(racoon, 0.42))
                             .into_any_element(),
                     )])]
                 } else {

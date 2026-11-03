@@ -469,12 +469,19 @@ pub fn decide_permission_from_settings(
     inputs: &[String],
     settings: &AgentSettings,
 ) -> ToolPermissionDecision {
-    ToolPermissionDecision::from_input(
+    let decision = ToolPermissionDecision::from_input(
         tool_name,
         inputs,
         &settings.tool_permissions,
         ShellKind::system(),
-    )
+    );
+    log::info!(
+        "agent: permission decision for {}: {:?} (global default {:?})",
+        tool_name,
+        decision,
+        settings.tool_permissions.default
+    );
+    decision
 }
 
 /// Normalizes a path by collapsing `.` and `..` segments without touching the filesystem.
@@ -614,6 +621,7 @@ mod tests {
                 default_width: px(300.),
                 position: settings::SidebarDockPosition::Left,
             },
+            threads_button_location: Default::default(),
             thinking_display: Default::default(),
         }
     }

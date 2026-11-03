@@ -48,6 +48,15 @@ pub trait DiffOperations {
         _cx: &mut App,
     ) {
     }
+    fn can_stage_selected_ranges(
+        &self,
+        _diff: Entity<BufferDiff>,
+        _buffer: Option<Entity<language::Buffer>>,
+        _buffer_ranges: &[Range<Anchor>],
+        _cx: &App,
+    ) -> bool {
+        false
+    }
     fn unstage_selected_ranges(
         &self,
         _diff: Entity<BufferDiff>,
@@ -55,6 +64,15 @@ pub trait DiffOperations {
         _buffer_ranges: Vec<Range<Anchor>>,
         _cx: &mut App,
     ) {
+    }
+    fn can_unstage_selected_ranges(
+        &self,
+        _diff: Entity<BufferDiff>,
+        _buffer: Option<Entity<language::Buffer>>,
+        _buffer_ranges: &[Range<Anchor>],
+        _cx: &App,
+    ) -> bool {
+        false
     }
     fn unstage(
         &self,

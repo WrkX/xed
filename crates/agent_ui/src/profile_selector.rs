@@ -92,6 +92,10 @@ impl ProfileSelector {
         self.picker_handle.clone()
     }
 
+    pub(crate) fn provider(&self) -> &Arc<dyn ProfileProvider> {
+        &self.provider
+    }
+
     pub fn cycle_profile(&mut self, cx: &mut Context<Self>) {
         if !self.provider.profiles_supported(cx) {
             return;
@@ -277,6 +281,35 @@ enum ProfilePickerEntry {
     Profile(ProfileMatchEntry),
 }
 
+/// Description shown for the built-in profiles.
+pub(crate) fn profile_documentation(profile_id: &AgentProfileId) -> Option<&'static str> {
+    match profile_id.as_str() {
+        builtin_profiles::WRITE => Some("Get help to write anything."),
+        builtin_profiles::ASK => Some("Chat about your codebase."),
+        builtin_profiles::MINIMAL => Some("Chat about anything with no tools."),
+        _ => None,
+    }
+}
+
+/// Tools enabled by a profile that are forbidden while the workspace is
+/// restricted. Returns an empty list for profiles that are safe to use.
+pub(crate) fn restricted_forbidden_tools(
+    profile_id: &AgentProfileId,
+    cx: &App,
+) -> Vec<SharedString> {
+    let Some(profile) = AgentSettings::get_global(cx).profiles.get(profile_id) else {
+        return Vec::new();
+    };
+    profile
+        .tools
+        .iter()
+        .filter(|(name, enabled)| {
+            **enabled && !agent::tool_allowed_in_restricted_mode(name.as_ref())
+        })
+        .map(|(name, _)| SharedString::from(name.to_string()))
+        .collect()
+}
+
 pub struct ProfilePickerDelegate {
     fs: Arc<dyn Fs>,
     provider: Arc<dyn ProfileProvider>,
@@ -373,26 +406,11 @@ impl ProfilePickerDelegate {
     /// Tools enabled by a profile that are forbidden while the workspace is
     /// restricted. Returns an empty list for profiles that are safe to use.
     fn restricted_forbidden_tools(profile_id: &AgentProfileId, cx: &App) -> Vec<SharedString> {
-        let Some(profile) = AgentSettings::get_global(cx).profiles.get(profile_id) else {
-            return Vec::new();
-        };
-        profile
-            .tools
-            .iter()
-            .filter(|(name, enabled)| {
-                **enabled && !agent::tool_allowed_in_restricted_mode(name.as_ref())
-            })
-            .map(|(name, _)| SharedString::from(name.to_string()))
-            .collect()
+        restricted_forbidden_tools(profile_id, cx)
     }
 
     fn documentation(candidate: &ProfileCandidate) -> Option<&'static str> {
-        match candidate.id.as_str() {
-            builtin_profiles::WRITE => Some("Get help to write anything."),
-            builtin_profiles::ASK => Some("Chat about your codebase."),
-            builtin_profiles::MINIMAL => Some("Chat about anything with no tools."),
-            _ => None,
-        }
+        profile_documentation(&candidate.id)
     }
 
     fn entries_from_candidates(candidates: &[ProfileCandidate]) -> Vec<ProfilePickerEntry> {

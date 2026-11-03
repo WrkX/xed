@@ -225,7 +225,7 @@ export DO_STARTUP_NOTIFY="true"
 export APP_CLI="zed"
 export APP_ICON="zed"
 export APP_ARGS="%U"
-export APP_NAME="xed"
+export APP_NAME="Racoon"
 if [[ "$channel" == "preview" ]]; then
   APP_ID="dev.zed.Zed-Preview"
 elif [[ "$channel" == "nightly" ]]; then

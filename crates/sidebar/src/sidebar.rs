@@ -12,8 +12,8 @@ use agent_ui::thread_metadata_store::{
     ThreadMetadata, ThreadMetadataStore, WorktreePaths, worktree_info_from_thread_paths,
 };
 use agent_ui::threads_archive_view::{
-    ThreadsArchiveView, ThreadsArchiveViewEvent, format_history_entry_timestamp,
-    fuzzy_match_positions,
+    ThreadFilter, ThreadScope, ThreadsArchiveView, ThreadsArchiveViewEvent,
+    format_history_entry_timestamp, fuzzy_match_positions,
 };
 use agent_ui::{
     AcpThreadImportOnboarding, Agent, AgentPanel, AgentPanelEvent, AgentThreadSource,
@@ -7520,6 +7520,10 @@ impl Sidebar {
 
     fn render_sidebar_bottom_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let is_archive = matches!(self.view, SidebarView::Archive(..));
+        let is_archived_only = matches!(
+            &self.view,
+            SidebarView::Archive(view) if view.read(cx).is_archived_only()
+        );
         let on_right = self.side(cx) == SidebarSide::Right;
 
         h_flex()
@@ -7543,6 +7547,19 @@ impl Sidebar {
                     })
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_archive(&ToggleThreadHistory, window, cx);
+                    })),
+            )
+            .child(
+                IconButton::new("archived-threads", IconName::Archive)
+                    .icon_size(IconSize::Small)
+                    .toggle_state(is_archived_only)
+                    .tooltip(Tooltip::text(if is_archived_only {
+                        "Hide Archived Threads"
+                    } else {
+                        "Show Archived Threads in Open Projects"
+                    }))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_archived_threads(window, cx);
                     })),
             )
             .child(div().flex_1())
@@ -7709,6 +7726,34 @@ impl Sidebar {
     }
 
     fn show_archive(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_archive_with_filter(ThreadFilter::All, ThreadScope::AllProjects, window, cx);
+    }
+
+    fn toggle_archived_threads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let is_archived_only = matches!(
+            &self.view,
+            SidebarView::Archive(view) if view.read(cx).is_archived_only()
+        );
+        if is_archived_only {
+            self.show_thread_list(window, cx);
+            return;
+        }
+
+        self.show_archive_with_filter(
+            ThreadFilter::ArchivedOnly,
+            ThreadScope::OpenProjects,
+            window,
+            cx,
+        );
+    }
+
+    fn show_archive_with_filter(
+        &mut self,
+        filter: ThreadFilter,
+        scope: ThreadScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let side = match self.side(cx) {
             SidebarSide::Left => "left",
             SidebarSide::Right => "right",
@@ -7736,13 +7781,15 @@ impl Sidebar {
         let agent_connection_store = agent_panel.read(cx).connection_store().downgrade();
 
         let archive_view = cx.new(|cx| {
-            ThreadsArchiveView::new(
+            let mut view = ThreadsArchiveView::new(
                 active_workspace.downgrade(),
                 agent_connection_store.clone(),
                 agent_server_store.clone(),
                 window,
                 cx,
-            )
+            );
+            view.set_filter(filter, scope, cx);
+            view
         });
 
         let subscription = cx.subscribe_in(

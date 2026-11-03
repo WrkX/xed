@@ -1,11 +1,12 @@
 use crate::{
-    DEFAULT_THREAD_TITLE, SelectPermissionGranularity,
+    DEFAULT_THREAD_TITLE, ManageProfiles, SelectPermissionGranularity,
     conversation_view::thread_search_bar::{ThreadSearchBar, ThreadSearchBarEvent},
     open_abs_path_at_point, project_path_for_file_link,
     thread_metadata_store::{ThreadId, ThreadMetadataStore},
 };
 use agent_client_protocol::schema::v2 as acp_v2;
-use std::{cell::RefCell, path::Path};
+use std::cell::{Cell, RefCell};
+use std::path::Path;
 
 use acp_thread::{
     Elicitation, ElicitationEntryId, ElicitationStatus, ForegroundActivity,
@@ -16,7 +17,7 @@ use agent::{
     SandboxStatusKey, SandboxStatusRefresh, SkillLoadingIssue, SkillLoadingIssueKind,
     SkillLoadingIssuesUpdated, ThreadSandbox, VerifiedSandboxStatus,
 };
-use agent_settings::UserAgentsMd;
+use agent_settings::{AgentProfile, UserAgentsMd, builtin_profiles};
 use agent_skills::MAX_SKILL_DESCRIPTION_LEN;
 use cloud_api_types::{SubmitAgentThreadFeedbackBody, SubmitAgentThreadFeedbackCommentsBody};
 use editor::actions::OpenExcerpts;
@@ -24,6 +25,7 @@ use sandbox::{SandboxFsPolicy, SandboxNetPolicy, SandboxPolicy};
 
 use crate::completion_provider::{AvailableSkill, PromptLocalCommand, pluralize};
 use crate::message_editor::SharedSessionCapabilities;
+use crate::profile_selector::{profile_documentation, restricted_forbidden_tools};
 use crate::ui::{
     SandboxGroup, SandboxRow, SandboxSection, SandboxStatusTooltip, TerminalSandboxWarning,
     TerminalToolHeader,
@@ -34,6 +36,7 @@ use db::kvp::KeyValueStore;
 use gpui::List;
 use gpui::Stateful;
 use gpui::TaskExt;
+use gpui::{Bounds, MouseButton, Pixels, canvas};
 use heapless::Vec as ArrayVec;
 use itertools::Itertools;
 use language_model::{
@@ -44,8 +47,8 @@ use notifications::status_toast::StatusToast;
 use project::ResolvedPath;
 use settings::{update_settings_file, update_settings_file_with_completion};
 use ui::{
-    ButtonLike, CalloutBorderPosition, Checkbox, SpinnerLabel, SpinnerVariant, SplitButton,
-    SplitButtonStyle, Tab, ToggleState,
+    ButtonLike, CalloutBorderPosition, Checkbox, ElevationIndex, ScrollAxes, Scrollbars,
+    SpinnerLabel, SpinnerVariant, Tab, ToggleState,
 };
 use url::Url;
 use util::markdown::source_position_from_fragment;
@@ -1257,8 +1260,10 @@ pub struct ThreadView {
     pub current_submission: Option<SubmissionId>,
     pub _subscriptions: Vec<Subscription>,
     pub message_editor: Entity<MessageEditor>,
+    thinking_effort_row: Entity<ThinkingEffortRow>,
     pub add_context_menu_handle: PopoverMenuHandle<ContextMenu>,
-    pub thinking_effort_menu_handle: PopoverMenuHandle<ContextMenu>,
+    pub approval_menu_handle: PopoverMenuHandle<ContextMenu>,
+    pub tool_approvals_menu_handle: PopoverMenuHandle<ContextMenu>,
     pub fast_mode_menu_handle: PopoverMenuHandle<ContextMenu>,
     pub project: WeakEntity<Project>,
     /// Cache + worktree snapshot for resolving paths in markdown code spans.
@@ -1657,6 +1662,10 @@ impl ThreadView {
         }));
 
         let current_submission = thread.read(cx).latest_submission_id();
+        let thinking_effort_row = {
+            let thread_view = cx.weak_entity();
+            cx.new(move |_| ThinkingEffortRow::new(thread_view))
+        };
         let mut this = Self {
             root_thread_id,
             session_id,
@@ -1712,8 +1721,10 @@ impl ThreadView {
             hovered_edited_file_buttons: None,
             current_submission,
             message_editor,
+            thinking_effort_row,
             add_context_menu_handle: PopoverMenuHandle::default(),
-            thinking_effort_menu_handle: PopoverMenuHandle::default(),
+            approval_menu_handle: PopoverMenuHandle::default(),
+            tool_approvals_menu_handle: PopoverMenuHandle::default(),
             fast_mode_menu_handle: PopoverMenuHandle::default(),
             project,
             code_span_resolver,
@@ -4105,7 +4116,7 @@ impl ThreadView {
         cx.notify();
     }
 
-    fn is_following(&self, cx: &App) -> bool {
+    pub(crate) fn is_following(&self, cx: &App) -> bool {
         match self.thread.read(cx).status() {
             ThreadStatus::Generating => self
                 .workspace
@@ -4117,8 +4128,9 @@ impl ThreadView {
         }
     }
 
-    fn toggle_following(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_following(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let following = self.is_following(cx);
+        log::info!("agent_ui: toggle_following called, following={following}");
 
         self.should_be_following = !following;
         if self.thread.read(cx).status() == ThreadStatus::Generating {
@@ -4261,24 +4273,27 @@ impl ThreadView {
 
         h_flex()
             .w_full()
-            .px_2()
+            .px_3()
+            .pt_3()
+            .flex_none()
             .justify_center()
             .child(
                 v_flex()
-                    .when_some(max_content_width, |this, max_w| this.flex_basis(max_w))
-                    .when(max_content_width.is_none(), |this| this.w_full())
+                    .w_full()
+                    .when_some(max_content_width, |this, max_w| this.max_w(max_w))
+                    .min_w_0()
                     .flex_shrink_1()
                     .flex_grow_0()
                     .max_w_full()
+                    .overflow_hidden()
                     .bg(self.activity_bar_bg(cx))
                     .border_1()
-                    .border_b_0()
                     .border_color(cx.theme().colors().border)
-                    .rounded_t_md()
+                    .rounded_lg()
                     .when(opaque_window, |this| {
                         this.shadow(vec![
-                            gpui::BoxShadow::new(px(1.), px(-1.), gpui::black().opacity(0.12))
-                                .blur_radius(px(2.)),
+                            gpui::BoxShadow::new(px(0.), px(1.), gpui::black().opacity(0.12))
+                                .blur_radius(px(4.)),
                         ])
                     })
                     .when_some(awaiting_permission, |this, element| this.child(element))
@@ -5611,6 +5626,7 @@ impl ThreadView {
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
         let has_messages = self.list_state.item_count() > 0;
+        let show_scroll_to_bottom = has_messages && !self.list_state.is_following_tail();
         let composer_is_read_only = self.message_editor.read(cx).editor().read(cx).read_only(cx);
         let discard_draft_button = composer_is_read_only.then(|| {
             div()
@@ -5630,6 +5646,7 @@ impl ThreadView {
         });
 
         h_flex()
+            .relative()
             .p_3()
             .flex_none()
             .justify_center()
@@ -5715,11 +5732,10 @@ impl ThreadView {
                                 h_flex()
                                     .min_w_0()
                                     .flex_1()
-                                    .gap_0p5()
+                                    .gap_1()
                                     .child(self.render_add_context_button(cx))
-                                    .child(self.render_composer_options_menu(cx))
                                     .child(
-                                        div().min_w_0().flex_1().child(
+                                        div().min_w_0().child(
                                             match self.config_options_view.as_ref() {
                                                 Some(config_view) => {
                                                     config_view.read(cx).render_model_selector(cx)
@@ -5729,79 +5745,65 @@ impl ThreadView {
                                                     .into_any_element(),
                                             },
                                         ),
-                                    ),
+                                    )
+                                    .when_some(
+                                        self.config_options_view.clone(),
+                                        |this, config_view| {
+                                            this.child(
+                                                config_view.read(cx).render_other_options(cx),
+                                            )
+                                        },
+                                    )
+                                    .children(self.mode_selector.clone())
+                                    .children(self.render_thinking_control(cx))
+                                    .children(self.render_fast_mode_control(cx)),
                             )
                             .child(
                                 h_flex()
                                     .flex_none()
                                     .gap_1()
                                     .children(discard_draft_button)
+                                    .children(self.render_token_usage(cx))
                                     .children(self.render_approval_selector(cx))
                                     .child(self.render_send_button(cx)),
                             ),
                     ),
             )
-            .into_any()
-    }
-
-    fn render_composer_options_menu(&self, cx: &Context<Self>) -> impl IntoElement {
-        let thread_view = cx.weak_entity();
-        PopoverMenu::new("composer-options")
-            .trigger_with_tooltip(
-                IconButton::new("composer-options", IconName::Settings)
-                    .icon_size(IconSize::Small)
-                    .icon_color(Color::Muted),
-                Tooltip::text("Message Options"),
-            )
-            .anchor(gpui::Anchor::BottomLeft)
-            .menu(move |window, cx| {
-                let thread_view = thread_view.clone();
-                Some(ContextMenu::build(window, cx, move |menu, _, _| {
-                    menu.header("Message Options").custom_row(move |_, cx| {
-                        thread_view
-                            .update(cx, |this, cx| {
-                                v_flex()
-                                    .p_2()
-                                    .gap_2()
-                                    .child(
-                                        h_flex()
-                                            .gap_1()
-                                            .children(this.profile_selector.clone())
-                                            .children(this.mode_selector.clone()),
-                                    )
-                                    .when_some(this.config_options_view.clone(), |element, view| {
-                                        element.child(view.read(cx).render_other_options(cx))
-                                    })
-                                    .child(
-                                        h_flex()
-                                            .gap_1()
-                                            .child(this.render_follow_toggle(cx))
-                                            .children(this.render_fast_mode_control(cx))
-                                            .children(this.render_thinking_control(cx))
-                                            .children(this.render_token_usage(cx)),
-                                    )
-                                    .into_any_element()
-                            })
-                            .log_err()
-                            .unwrap_or_else(|| Empty.into_any_element())
-                    })
-                }))
+            .when(show_scroll_to_bottom, |this| {
+                this.child(
+                    div().absolute().right_5().bottom_full().child(
+                        IconButton::new("scroll-to-bottom", IconName::ArrowDown)
+                            .icon_size(IconSize::Medium)
+                            .icon_color(Color::Default)
+                            .shape(ui::IconButtonShape::Square)
+                            .style(ButtonStyle::Outlined)
+                            .layer(ElevationIndex::ElevatedSurface)
+                            .tooltip(Tooltip::for_action_title(
+                                "Scroll to Bottom",
+                                &ScrollOutputToBottom,
+                            ))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.scroll_to_end(cx);
+                                this.list_state.set_follow_mode(gpui::FollowMode::Tail);
+                            })),
+                    ),
+                )
             })
+            .into_any()
     }
 
     fn render_approval_selector(&self, cx: &Context<Self>) -> Option<AnyElement> {
         self.as_native_thread(cx)?;
         let permission = AgentSettings::get_global(cx).tool_permissions.default;
-        let (label, icon) = match permission {
-            settings::ToolPermissionMode::Allow => ("Auto", IconName::BoltOutlined),
-            settings::ToolPermissionMode::Confirm => ("Ask", IconName::Lock),
-            settings::ToolPermissionMode::Deny => ("Block", IconName::XCircle),
-        };
+        let (label, icon) = tool_permission_label_and_icon(permission);
         let project = self.thread.read(cx).project().clone();
         let thread_view = cx.weak_entity();
+        let profile_selector = self.profile_selector.clone();
+        let tool_approvals_menu_handle = self.tool_approvals_menu_handle.clone();
 
         Some(
             PopoverMenu::new("tool-approval-mode")
+                .with_handle(self.approval_menu_handle.clone())
                 .trigger_with_tooltip(
                     Button::new("tool-approval-mode", label)
                         .label_size(LabelSize::Small)
@@ -5813,72 +5815,300 @@ impl ThreadView {
                 .menu(move |window, cx| {
                     let project = project.clone();
                     let thread_view = thread_view.clone();
-                    Some(ContextMenu::build(window, cx, move |mut menu, _, _| {
-                        menu = menu.header("Tool Approvals · All Zed Agent Threads");
-                        for (label, mode) in [
-                            ("Ask by Default", settings::ToolPermissionMode::Confirm),
-                            ("Automatically Approve", settings::ToolPermissionMode::Allow),
-                            ("Block by Default", settings::ToolPermissionMode::Deny),
-                        ] {
-                            let project = project.clone();
-                            let thread_view = thread_view.clone();
-                            menu = menu.item(
-                                ContextMenuEntry::new(label)
-                                    .toggleable(IconPosition::End, mode == permission)
-                                    .handler(move |_, cx| {
-                                        let fs = project.read(cx).fs().clone();
-                                        let completion = update_settings_file_with_completion(
-                                            fs,
+                    let profile_selector = profile_selector.clone();
+                    let tool_approvals_menu_handle = tool_approvals_menu_handle.clone();
+                    Some(ContextMenu::build(
+                        window,
+                        cx,
+                        move |mut menu, _, cx| {
+                            let permission =
+                                AgentSettings::get_global(cx).tool_permissions.default;
+                            let permission_label = tool_permission_label_and_icon(permission).0;
+
+                            menu = menu
+                                .custom_row({
+                                    let project = project.clone();
+                                    let thread_view = thread_view.clone();
+                                    let tool_approvals_menu_handle =
+                                        tool_approvals_menu_handle.clone();
+                                    move |_, _| {
+                                        let trigger =
+                                            Button::new("tool-approvals-trigger", permission_label)
+                                                .label_size(LabelSize::Small)
+                                                .style(ButtonStyle::Filled)
+                                                .end_icon(
+                                                    Icon::new(IconName::ChevronDown)
+                                                        .size(IconSize::XSmall)
+                                                        .color(Color::Muted),
+                                                );
+
+                                        h_flex()
+                                            .w_full()
+                                            .justify_between()
+                                            .gap_2()
+                                            .child(Label::new("Tool Approvals"))
+                                            .child(
+                                                PopoverMenu::new("tool-approvals")
+                                                    .with_handle(
+                                                        tool_approvals_menu_handle.clone(),
+                                                    )
+                                                    .anchor(gpui::Anchor::BottomRight)
+                                                    .trigger(trigger)
+                                                    .menu({
+                                                let project = project.clone();
+                                                let thread_view = thread_view.clone();
+                                                move |window, cx| {
+                                                    let project = project.clone();
+                                                    let thread_view = thread_view.clone();
+                                                    Some(ContextMenu::build(
+                                                        window,
+                                                        cx,
+                                                        move |mut menu, _, cx| {
+                                                            let permission =
+                                                                AgentSettings::get_global(cx)
+                                                                    .tool_permissions
+                                                                    .default;
+                                                            menu = menu
+                                                                .fixed_width(rems(22.).into())
+                                                                .keep_open_on_confirm(false);
+
+                                                            for (mode_label, _description, mode_icon, mode) in [
+                                                                (
+                                                                    "Ask by Default",
+                                                                    "Zed asks for approval before running any tool.",
+                                                                    IconName::Lock,
+                                                                    settings::ToolPermissionMode::Confirm,
+                                                                ),
+                                                                (
+                                                                    "Automatically Approve",
+                                                                    "Zed runs tools without asking, unless your rules require approval.",
+                                                                    IconName::BoltOutlined,
+                                                                    settings::ToolPermissionMode::Allow,
+                                                                ),
+                                                                (
+                                                                    "Block by Default",
+                                                                    "Zed blocks tools from running, unless your rules allow them.",
+                                                                    IconName::XCircle,
+                                                                    settings::ToolPermissionMode::Deny,
+                                                                ),
+                                                            ] {
+                                                                let is_selected = mode == permission;
+                                                                let project = project.clone();
+                                                                let thread_view = thread_view.clone();
+
+                                                                menu = menu.item(
+                                                                    ContextMenuEntry::new(mode_label)
+                                                                        .icon(mode_icon)
+                                                                        .icon_color(Color::Muted)
+                                                                        .toggleable(IconPosition::End, is_selected)
+                                                                        .handler(move |_, cx| {
+                                                                            log::info!(
+                                                                                "agent_ui: selected tool approval mode {:?}",
+                                                                                mode
+                                                                            );
+                                                                            let fs =
+                                                                                project.read(cx).fs().clone();
+                                                                            let completion =
+                                                                                update_settings_file_with_completion(
+                                                                                    fs,
+                                                                                    cx,
+                                                                                    move |settings, _| {
+                                                                                        settings
+                                                                                            .agent
+                                                                                            .get_or_insert_default()
+                                                                                            .tool_permissions
+                                                                                            .get_or_insert_default()
+                                                                                            .default = Some(mode);
+                                                                                    },
+                                                                                );
+                                                                            let thread_view_for_error =
+                                                                                thread_view.clone();
+                                                                            cx.spawn(async move |cx| {
+                                                                                let result = completion
+                                                                                    .await
+                                                                                    .map_err(anyhow::Error::from)
+                                                                                    .and_then(|result| result);
+                                                                                if let Err(error) = result {
+                                                                                    log::error!(
+                                                                                        "agent_ui: failed to save tool approval mode: {error:?}"
+                                                                                    );
+                                                                                    thread_view_for_error
+                                                                                        .update(cx, |this, cx| {
+                                                                                            this.handle_thread_error(
+                                                                                                error.context(
+                                                                                                    "Could not save tool approval mode",
+                                                                                                ),
+                                                                                                cx,
+                                                                                            );
+                                                                                        })
+                                                                                        .log_err();
+                                                                                } else {
+                                                                                    log::info!(
+                                                                                        "agent_ui: tool approval mode saved"
+                                                                                    );
+                                                                                }
+                                                                            })
+                                                                            .detach();
+                                                                            thread_view
+                                                                                .update(cx, |this, cx| {
+                                                                                    this.approval_menu_handle
+                                                                                        .hide(cx);
+                                                                                })
+                                                                                .log_err();
+                                                                        }),
+                                                                );
+                                                            }
+
+                                                            menu
+                                                        },
+                                                    ))
+                                                }
+                                                    }),
+                                            )
+                                            .into_any_element()
+                                    }
+                                })
+                                .keep_open_while({
+                                    let handle = tool_approvals_menu_handle.clone();
+                                    move |_, _| handle.is_deployed()
+                                })
+                                .fixed_width(rems(20.).into());
+
+                            if let Some(profile_selector) = profile_selector.as_ref() {
+                                let provider = profile_selector.read(cx).provider().clone();
+                                if provider.model_selected(cx) && provider.profiles_supported(cx) {
+                                    let current_profile_id = provider.profile_id(cx);
+                                    let is_restricted = provider.is_restricted(cx);
+                                    let mut builtin_entries = Vec::new();
+                                    let mut custom_entries = Vec::new();
+                                    for (profile_id, name) in AgentProfile::available_profiles(cx) {
+                                        if builtin_profiles::is_builtin(&profile_id) {
+                                            builtin_entries.push((profile_id, name));
+                                        } else {
+                                            custom_entries.push((profile_id, name));
+                                        }
+                                    }
+
+                                    menu = menu.separator().header("Profiles");
+                                    menu = add_profile_rows(
+                                        menu,
+                                        builtin_entries,
+                                        provider.clone(),
+                                        &current_profile_id,
+                                        is_restricted,
+                                        cx,
+                                    );
+                                    if !custom_entries.is_empty() {
+                                        menu = menu.header("Custom Profiles");
+                                        menu = add_profile_rows(
+                                            menu,
+                                            custom_entries,
+                                            provider.clone(),
+                                            &current_profile_id,
+                                            is_restricted,
                                             cx,
-                                            move |settings, _| {
-                                                settings
-                                                    .agent
-                                                    .get_or_insert_default()
-                                                    .tool_permissions
-                                                    .get_or_insert_default()
-                                                    .default = Some(mode);
-                                            },
                                         );
-                                        let thread_view = thread_view.clone();
-                                        cx.spawn(async move |cx| {
-                                            let result = completion
-                                                .await
-                                                .map_err(anyhow::Error::from)
-                                                .and_then(|result| result);
-                                            if let Err(error) = result {
-                                                thread_view
-                                                    .update(cx, |this, cx| {
-                                                        this.handle_thread_error(
-                                                            error.context(
-                                                                "Could not save tool approval mode",
-                                                            ),
+                                    }
+
+                                    menu = menu.custom_row(move |_, cx| {
+                                        div()
+                                            .w_full()
+                                            .pt_1()
+                                            .child(
+                                                Button::new("configure-profiles", "Configure")
+                                                    .full_width()
+                                                    .style(ButtonStyle::Outlined)
+                                                    .key_binding(
+                                                        KeyBinding::for_action(
+                                                            &ManageProfiles::default(),
+                                                            cx,
+                                                        )
+                                                        .size(rems_from_px(12_f32)),
+                                                    )
+                                                    .on_click(|_, window, cx| {
+                                                        window.dispatch_action(
+                                                            ManageProfiles::default()
+                                                                .boxed_clone(),
                                                             cx,
                                                         );
-                                                    })
-                                                    .log_err();
-                                            }
-                                        })
-                                        .detach();
-                                    }),
-                            );
-                        }
-                        menu.separator().custom_row(|_, _| {
-                            div()
-                                .max_w_64()
-                                .p_2()
-                                .child(
-                                    Label::new(
-                                        "Per-tool rules and sandbox permissions still apply.",
-                                    )
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
-                                )
-                                .into_any_element()
-                        })
-                    }))
+                                                    }),
+                                            )
+                                            .into_any_element()
+                                    });
+                                }
+                            }
+
+                            let effort_available = thread_view
+                                .read_with(cx, |this, cx| this.thinking_effort_info(cx))
+                                .ok()
+                                .flatten()
+                                .is_some();
+                            if effort_available {
+                                let effort_row = thread_view
+                                    .read_with(cx, |this, _| this.thinking_effort_row.clone())
+                                    .ok();
+                                if let Some(effort_row) = effort_row {
+                                    menu = menu.separator().custom_row(move |_window, _cx| {
+                                        effort_row.clone().into_any_element()
+                                    });
+                                }
+                            }
+
+                            menu.keep_open_on_confirm(false)
+                        },
+                    ))
                 })
                 .into_any_element(),
         )
+    }
+
+    /// The effort levels and current selection to offer in the approval popover,
+    /// or `None` when the current model has no meaningful reasoning effort to pick.
+    fn thinking_effort_info(
+        &self,
+        cx: &App,
+    ) -> Option<(Vec<LanguageModelEffortLevel>, Option<String>)> {
+        let thread = self.as_native_thread(cx)?.read(cx);
+        let model = thread.model()?;
+        if !model.supports_thinking() {
+            return None;
+        }
+        // A disabled thinking toggle means there is no reasoning to tune.
+        if model.supports_disabling_thinking() && !thread.thinking_enabled() {
+            return None;
+        }
+        let effort_levels = model.supported_effort_levels();
+        if effort_levels.is_empty() {
+            return None;
+        }
+        Some((effort_levels, thread.thinking_effort().cloned()))
+    }
+
+    fn set_native_agent_thinking_effort(&mut self, effort: String, cx: &mut Context<Self>) {
+        let Some(thread) = self.as_native_thread(cx) else {
+            return;
+        };
+
+        thread.update(cx, |thread, cx| {
+            thread.set_thinking_effort(Some(effort.clone()), cx);
+
+            let favorite_key = thread
+                .model()
+                .map(|model| (model.provider_id().0.to_string(), model.id().0.to_string()));
+            let fs = thread.project().read(cx).fs().clone();
+            update_settings_file(fs, cx, move |settings, _| {
+                if let Some(agent) = settings.agent.as_mut() {
+                    if let Some(default_model) = agent.default_model.as_mut() {
+                        default_model.effort = Some(effort.clone());
+                    }
+                    if let Some((provider_id, model_id)) = &favorite_key {
+                        agent.update_favorite_model(provider_id, model_id, |favorite| {
+                            favorite.effort = Some(effort)
+                        });
+                    }
+                }
+            });
+        });
     }
 
     fn render_queue_steer_button(
@@ -6560,27 +6790,10 @@ impl ThreadView {
         let thread = self.as_native_thread(cx)?.read(cx);
         let model = thread.model()?;
 
-        let supports_thinking = model.supports_thinking();
-        if !supports_thinking {
+        // Effort is offered in the tool approvals popover, so this control only
+        // toggles thinking for models that can have it turned off.
+        if !model.supports_thinking() || !model.supports_disabling_thinking() {
             return None;
-        }
-
-        // A toggle would be dishonest for models that always think: only
-        // offer the effort selector.
-        if !model.supports_disabling_thinking() {
-            let effort_levels = model.supported_effort_levels();
-            if effort_levels.is_empty() {
-                return None;
-            }
-            return Some(
-                self.render_effort_selector(
-                    effort_levels,
-                    thread.thinking_effort().cloned(),
-                    true,
-                    cx,
-                )
-                .into_any_element(),
-            );
         }
 
         let thinking = thread.thinking_enabled();
@@ -6635,193 +6848,7 @@ impl ThreadView {
                 }
             }));
 
-        if model.supported_effort_levels().is_empty() {
-            return Some(thinking_toggle.into_any_element());
-        }
-
-        if !model.supported_effort_levels().is_empty() && !thinking {
-            return Some(thinking_toggle.into_any_element());
-        }
-
-        let left_btn = thinking_toggle;
-        let right_btn = self.render_effort_selector(
-            model.supported_effort_levels(),
-            thread.thinking_effort().cloned(),
-            false,
-            cx,
-        );
-
-        Some(
-            SplitButton::new(left_btn, right_btn.into_any_element())
-                .style(SplitButtonStyle::Transparent)
-                .into_any_element(),
-        )
-    }
-
-    fn render_effort_selector(
-        &self,
-        supported_effort_levels: Vec<LanguageModelEffortLevel>,
-        selected_effort: Option<String>,
-        standalone: bool,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
-        let weak_self = cx.weak_entity();
-
-        let default_effort_level = supported_effort_levels
-            .iter()
-            .find(|effort_level| effort_level.is_default)
-            .cloned();
-
-        let selected = selected_effort.and_then(|effort| {
-            supported_effort_levels
-                .iter()
-                .find(|level| level.value == effort)
-                .cloned()
-        });
-
-        let label = selected
-            .clone()
-            .or(default_effort_level)
-            .map_or("Select Effort".into(), |effort| effort.name);
-
-        let (label_color, icon) = if self.thinking_effort_menu_handle.is_deployed() {
-            (Color::Accent, IconName::ChevronUp)
-        } else {
-            (Color::Muted, IconName::ChevronDown)
-        };
-
-        let focus_handle = self.message_editor.focus_handle(cx);
-        let show_cycle_row = supported_effort_levels.len() > 1;
-
-        let tooltip = Tooltip::element({
-            move |_, cx| {
-                let mut content = v_flex().gap_1().child(
-                    h_flex()
-                        .gap_2()
-                        .justify_between()
-                        .child(Label::new("Change Thinking Effort"))
-                        .child(KeyBinding::for_action_in(
-                            &ToggleThinkingEffortMenu,
-                            &focus_handle,
-                            cx,
-                        )),
-                );
-
-                if show_cycle_row {
-                    content = content.child(
-                        h_flex()
-                            .pt_1()
-                            .gap_2()
-                            .justify_between()
-                            .border_t_1()
-                            .border_color(cx.theme().colors().border_variant)
-                            .child(Label::new("Cycle Thinking Effort"))
-                            .child(KeyBinding::for_action_in(
-                                &CycleThinkingEffort,
-                                &focus_handle,
-                                cx,
-                            )),
-                    );
-                }
-
-                content.into_any_element()
-            }
-        });
-
-        let trigger = if standalone {
-            ButtonLike::new("effort-selector-trigger").child(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        Icon::new(IconName::ThinkingMode)
-                            .size(IconSize::Small)
-                            .color(Color::Accent),
-                    )
-                    .child(Label::new(label).size(LabelSize::Small).color(label_color))
-                    .child(Icon::new(icon).size(IconSize::XSmall).color(Color::Muted)),
-            )
-        } else {
-            ButtonLike::new_rounded_right("effort-selector-trigger")
-                .child(Label::new(label).size(LabelSize::Small).color(label_color))
-                .child(Icon::new(icon).size(IconSize::XSmall).color(Color::Muted))
-        };
-
-        PopoverMenu::new("effort-selector")
-            .trigger_with_tooltip(
-                trigger.selected_style(ButtonStyle::Tinted(TintColor::Accent)),
-                tooltip,
-            )
-            .menu(move |window, cx| {
-                Some(ContextMenu::build(window, cx, |mut menu, _window, _cx| {
-                    menu = menu.header("Change Thinking Effort");
-
-                    for effort_level in supported_effort_levels.clone() {
-                        let is_selected = selected
-                            .as_ref()
-                            .is_some_and(|selected| selected.value == effort_level.value);
-                        let entry = ContextMenuEntry::new(effort_level.name)
-                            .toggleable(IconPosition::End, is_selected);
-
-                        menu.push_item(entry.handler({
-                            let effort = effort_level.value.clone();
-                            let weak_self = weak_self.clone();
-                            move |_window, cx| {
-                                let effort = effort.clone();
-                                weak_self
-                                    .update(cx, |this, cx| {
-                                        if let Some(thread) = this.as_native_thread(cx) {
-                                            thread.update(cx, |thread, cx| {
-                                                thread.set_thinking_effort(
-                                                    Some(effort.to_string()),
-                                                    cx,
-                                                );
-
-                                                let favorite_key = thread.model().map(|model| {
-                                                    (
-                                                        model.provider_id().0.to_string(),
-                                                        model.id().0.to_string(),
-                                                    )
-                                                });
-                                                let fs = thread.project().read(cx).fs().clone();
-                                                update_settings_file(fs, cx, move |settings, _| {
-                                                    if let Some(agent) = settings.agent.as_mut() {
-                                                        if let Some(default_model) =
-                                                            agent.default_model.as_mut()
-                                                        {
-                                                            default_model.effort =
-                                                                Some(effort.to_string());
-                                                        }
-                                                        if let Some((provider_id, model_id)) =
-                                                            &favorite_key
-                                                        {
-                                                            agent.update_favorite_model(
-                                                                provider_id,
-                                                                model_id,
-                                                                |favorite| {
-                                                                    favorite.effort =
-                                                                        Some(effort.to_string())
-                                                                },
-                                                            );
-                                                        }
-                                                    }
-                                                });
-                                            });
-                                        }
-                                    })
-                                    .ok();
-                            }
-                        }));
-                    }
-
-                    menu
-                }))
-            })
-            .with_handle(self.thinking_effort_menu_handle.clone())
-            .offset(gpui::Point {
-                x: px(0.0),
-                y: px(-2.0),
-            })
-            .anchor(gpui::Anchor::BottomLeft)
+        Some(thinking_toggle.into_any_element())
     }
 
     fn render_send_button(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -7096,45 +7123,6 @@ impl ThreadView {
                     editor.insert_skill_crease(&skill, window, cx);
                 });
             })
-    }
-
-    fn render_follow_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let following = self.is_following(cx);
-
-        let tooltip_label = if following {
-            if self.agent_id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
-                format!("Stop Following the {}", self.agent_id)
-            } else {
-                format!("Stop Following {}", self.agent_id)
-            }
-        } else {
-            if self.agent_id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
-                format!("Follow the {}", self.agent_id)
-            } else {
-                format!("Follow {}", self.agent_id)
-            }
-        };
-
-        IconButton::new("follow-agent", IconName::Crosshair)
-            .icon_size(IconSize::Small)
-            .icon_color(Color::Muted)
-            .toggle_state(following)
-            .selected_icon_color(Some(Color::Custom(cx.theme().players().agent().cursor)))
-            .tooltip(move |_window, cx| {
-                if following {
-                    Tooltip::for_action(tooltip_label.clone(), &Follow, cx)
-                } else {
-                    Tooltip::with_meta(
-                        tooltip_label.clone(),
-                        Some(&Follow),
-                        "Track the agent's location as it reads and edits files.",
-                        cx,
-                    )
-                }
-            })
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.toggle_following(window, cx);
-            }))
     }
 }
 
@@ -14162,25 +14150,15 @@ impl ThreadView {
     }
 
     fn cycle_native_agent_thinking_effort(&mut self, cx: &mut Context<Self>) {
+        let Some((effort_levels, current_effort)) = self.thinking_effort_info(cx) else {
+            return;
+        };
         let Some(thread) = self.as_native_thread(cx) else {
             return;
         };
-
-        let (effort_levels, current_effort) = {
-            let thread_ref = thread.read(cx);
-            let Some(model) = thread_ref.model() else {
-                return;
-            };
-            if !model.supports_thinking() || !thread_ref.thinking_enabled() {
-                return;
-            }
-            let effort_levels = model.supported_effort_levels();
-            if effort_levels.is_empty() {
-                return;
-            }
-            let current_effort = thread_ref.thinking_effort().cloned();
-            (effort_levels, current_effort)
-        };
+        if !thread.read(cx).thinking_enabled() {
+            return;
+        }
 
         let current_index = current_effort.and_then(|current| {
             effort_levels
@@ -14193,26 +14171,320 @@ impl ThreadView {
         };
         let next_effort = effort_levels[next_index].value.to_string();
 
-        thread.update(cx, |thread, cx| {
-            thread.set_thinking_effort(Some(next_effort.clone()), cx);
+        self.set_native_agent_thinking_effort(next_effort, cx);
+    }
+}
 
-            let favorite_key = thread
-                .model()
-                .map(|model| (model.provider_id().0.to_string(), model.id().0.to_string()));
-            let fs = thread.project().read(cx).fs().clone();
-            update_settings_file(fs, cx, move |settings, _| {
-                if let Some(agent) = settings.agent.as_mut() {
-                    if let Some(default_model) = agent.default_model.as_mut() {
-                        default_model.effort = Some(next_effort.clone());
-                    }
-                    if let Some((provider_id, model_id)) = &favorite_key {
-                        agent.update_favorite_model(provider_id, model_id, |favorite| {
-                            favorite.effort = Some(next_effort)
-                        });
-                    }
-                }
-            });
+fn tool_permission_label_and_icon(
+    mode: settings::ToolPermissionMode,
+) -> (&'static str, IconName) {
+    match mode {
+        settings::ToolPermissionMode::Allow => ("Auto", IconName::BoltOutlined),
+        settings::ToolPermissionMode::Confirm => ("Ask", IconName::Lock),
+        settings::ToolPermissionMode::Deny => ("Block", IconName::XCircle),
+    }
+}
+
+fn profile_row(
+    name: SharedString,
+    description: Option<SharedString>,
+    selected: bool,
+    warning: bool,
+) -> AnyElement {
+    menu_option_row(None, name, description, selected, warning)
+}
+
+fn menu_option_row(
+    icon: Option<IconName>,
+    label: SharedString,
+    description: Option<SharedString>,
+    selected: bool,
+    warning: bool,
+) -> AnyElement {
+    h_flex()
+        .w_full()
+        .gap_2()
+        .items_center()
+        .when_some(icon, |this, icon| {
+            this.child(Icon::new(icon).size(IconSize::Small).color(Color::Muted))
+        })
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_0p5()
+                .child(Label::new(label))
+                .when_some(description, |this, description| {
+                    this.child(
+                        Label::new(description)
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                }),
+        )
+        .when(warning, |this| {
+            this.child(
+                Icon::new(IconName::Warning)
+                    .size(IconSize::Small)
+                    .color(Color::Warning),
+            )
+        })
+        .when(selected, |this| {
+            this.child(
+                Icon::new(IconName::Check)
+                    .size(IconSize::Small)
+                    .color(Color::Accent),
+            )
+        })
+        .into_any_element()
+}
+
+fn add_profile_rows(
+    mut menu: ContextMenu,
+    profiles: Vec<(AgentProfileId, SharedString)>,
+    provider: Arc<dyn ProfileProvider>,
+    current_profile_id: &AgentProfileId,
+    is_restricted: bool,
+    cx: &App,
+) -> ContextMenu {
+    for (profile_id, name) in profiles {
+        let is_selected = &profile_id == current_profile_id;
+        let description = profile_documentation(&profile_id).map(SharedString::from);
+        let show_warning =
+            is_restricted && !restricted_forbidden_tools(&profile_id, cx).is_empty();
+        let provider = provider.clone();
+
+        menu = menu.custom_entry(
+            move |_window, _cx| {
+                profile_row(
+                    name.clone(),
+                    description.clone(),
+                    is_selected,
+                    show_warning,
+                )
+            },
+            move |_, cx| {
+                log::info!("agent_ui: selected profile {}", profile_id);
+                provider.set_profile(profile_id.clone(), cx);
+            },
+        );
+    }
+
+    menu
+}
+
+const EFFORT_TRACK_WIDTH: f32 = 104.0;
+const EFFORT_TRACK_HEIGHT: f32 = 22.0;
+const EFFORT_KNOB_SIZE: f32 = 16.0;
+const EFFORT_DOT_SIZE: f32 = 4.0;
+const EFFORT_TRACK_INSET: f32 = EFFORT_KNOB_SIZE / 2.0;
+
+/// The reasoning-effort row shown in the tool approvals popover.
+///
+/// It lives in its own entity so dragging the knob can update the selection
+/// without rebuilding the surrounding menu, which would drop the in-progress
+/// drag.
+struct ThinkingEffortRow {
+    thread_view: WeakEntity<ThreadView>,
+    track_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    dragging: bool,
+}
+
+impl ThinkingEffortRow {
+    fn new(thread_view: WeakEntity<ThreadView>) -> Self {
+        Self {
+            thread_view,
+            track_bounds: Rc::new(Cell::new(None)),
+            dragging: false,
+        }
+    }
+
+    fn effort_levels(&self, cx: &App) -> Option<(Vec<LanguageModelEffortLevel>, Option<usize>)> {
+        let (levels, selected_effort) = self
+            .thread_view
+            .read_with(cx, |thread_view, cx| thread_view.thinking_effort_info(cx))
+            .ok()
+            .flatten()?;
+        let selected_index = selected_effort
+            .and_then(|effort| levels.iter().position(|level| level.value == effort))
+            .or_else(|| levels.iter().position(|level| level.is_default));
+        Some((levels, selected_index))
+    }
+
+    fn select_effort_at(&mut self, position: gpui::Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(bounds) = self.track_bounds.get() else {
+            return;
+        };
+        let Some((levels, selected_index)) = self.effort_levels(cx) else {
+            return;
+        };
+
+        let index = effort_index_at_position(bounds, position, levels.len());
+        if Some(index) == selected_index {
+            return;
+        }
+
+        let Some(level) = levels.get(index) else {
+            return;
+        };
+        let effort = level.value.to_string();
+        self.thread_view
+            .update(cx, |thread_view, cx| {
+                thread_view.set_native_agent_thinking_effort(effort, cx);
+            })
+            .log_err();
+        cx.notify();
+    }
+}
+
+fn effort_index_at_position(
+    bounds: Bounds<Pixels>,
+    position: gpui::Point<Pixels>,
+    level_count: usize,
+) -> usize {
+    if level_count <= 1 {
+        return 0;
+    }
+
+    let usable_width = (bounds.size.width.as_f32() - 2.0 * EFFORT_TRACK_INSET).max(1.0);
+    let offset = position.x.as_f32() - bounds.origin.x.as_f32() - EFFORT_TRACK_INSET;
+    let fraction = (offset / usable_width).clamp(0.0, 1.0);
+    ((fraction * (level_count - 1) as f32).round() as usize).min(level_count - 1)
+}
+
+fn effort_dot_center(index: usize, level_count: usize) -> f32 {
+    if level_count <= 1 {
+        return EFFORT_TRACK_WIDTH / 2.0;
+    }
+
+    EFFORT_TRACK_INSET
+        + index as f32 * (EFFORT_TRACK_WIDTH - 2.0 * EFFORT_TRACK_INSET)
+            / (level_count - 1) as f32
+}
+
+impl Render for ThinkingEffortRow {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some((levels, selected_index)) = self.effort_levels(cx) else {
+            return div().into_any_element();
+        };
+        let level_count = levels.len();
+        let label = selected_index
+            .and_then(|index| levels.get(index))
+            .map_or_else(
+                || SharedString::from("Effort"),
+                |level| SharedString::from(format!("Effort ({})", level.name)),
+            );
+        let knob_index = selected_index.unwrap_or(0);
+
+        let track_background = cx.theme().colors().editor_background;
+        let knob_color = cx.theme().colors().text;
+        let dot_color = cx.theme().colors().text.opacity(0.3);
+        let hover_background = cx.theme().colors().ghost_element_hover;
+
+        let track_bounds = self.track_bounds.clone();
+        let this = cx.entity().downgrade();
+
+        let dots = (0..level_count).map(move |index| {
+            div()
+                .absolute()
+                .left(px(effort_dot_center(index, level_count) - EFFORT_DOT_SIZE / 2.0))
+                .top(px((EFFORT_TRACK_HEIGHT - EFFORT_DOT_SIZE) / 2.0))
+                .size(px(EFFORT_DOT_SIZE))
+                .rounded_full()
+                .bg(dot_color)
         });
+
+        h_flex()
+            .id("thinking-effort-row")
+            .w_full()
+            .gap_2()
+            .items_center()
+            .rounded_sm()
+            .hover(move |this| this.bg(hover_background))
+            .child(
+                Icon::new(IconName::ThinkingMode)
+                    .size(IconSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(Label::new(label))
+            .child(
+                div()
+                    .id("thinking-effort-track")
+                    .relative()
+                    .ml_auto()
+                    .w(px(EFFORT_TRACK_WIDTH))
+                    .h(px(EFFORT_TRACK_HEIGHT))
+                    .rounded_full()
+                    .bg(track_background)
+                    .cursor_pointer()
+                    .children(dots)
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(
+                                effort_dot_center(knob_index, level_count)
+                                    - EFFORT_KNOB_SIZE / 2.0,
+                            ))
+                            .top(px((EFFORT_TRACK_HEIGHT - EFFORT_KNOB_SIZE) / 2.0))
+                            .size(px(EFFORT_KNOB_SIZE))
+                            .rounded_full()
+                            .bg(knob_color),
+                    )
+                    .child(
+                        canvas(
+                            move |bounds, _, _| track_bounds.set(Some(bounds)),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full(),
+                    )
+                    .on_mouse_down(MouseButton::Left, {
+                        let this = this.clone();
+                        move |event, _window, cx| {
+                            this.update(cx, |this, cx| {
+                                this.dragging = true;
+                                this.select_effort_at(event.position, cx);
+                            })
+                            .log_err();
+                        }
+                    })
+                    .on_mouse_move({
+                        let this = this.clone();
+                        move |event, _window, cx| {
+                            if event.pressed_button != Some(MouseButton::Left) {
+                                return;
+                            }
+                            this.update(cx, |this, cx| {
+                                if this.dragging {
+                                    this.select_effort_at(event.position, cx);
+                                }
+                            })
+                            .log_err();
+                        }
+                    })
+                    .on_mouse_up(MouseButton::Left, {
+                        let this = this.clone();
+                        move |_, _, cx| {
+                            this.update(cx, |this, cx| {
+                                this.dragging = false;
+                                cx.notify();
+                            })
+                            .log_err();
+                        }
+                    })
+                    .on_mouse_up_out(MouseButton::Left, {
+                        move |_, _, cx| {
+                            this.update(cx, |this, cx| {
+                                this.dragging = false;
+                                cx.notify();
+                            })
+                            .log_err();
+                        }
+                    }),
+            )
+            .into_any_element()
     }
 }
 
@@ -14238,7 +14510,13 @@ impl Render for ThreadView {
                         .size_full()
                         .children(self.render_pinned_prompt(cx))
                         .child(self.render_entries(cx))
-                        .vertical_scrollbar_for(&list_state, window, cx)
+                        .custom_scrollbars(
+                            Scrollbars::new(ScrollAxes::Vertical)
+                                .tracked_scroll_handle(&list_state)
+                                .notify_content(),
+                            window,
+                            cx,
+                        )
                         .into_any()
                 } else {
                     this.justify_center()
@@ -14439,7 +14717,7 @@ impl Render for ThreadView {
                             return;
                         }
                     }
-                    let menu_handle = this.thinking_effort_menu_handle.clone();
+                    let menu_handle = this.approval_menu_handle.clone();
                     window.defer(cx, move |window, cx| {
                         menu_handle.toggle(window, cx);
                     });
@@ -14488,8 +14766,11 @@ impl Render for ThreadView {
                     }
                 }
 
-                if let Some(profile_selector) = this.profile_selector.clone() {
-                    profile_selector.read(cx).menu_handle().toggle(window, cx);
+                if this.as_native_thread(cx).is_some() {
+                    let menu_handle = this.approval_menu_handle.clone();
+                    window.defer(cx, move |window, cx| {
+                        menu_handle.toggle(window, cx);
+                    });
                 } else if let Some(mode_selector) = this.mode_selector.clone() {
                     mode_selector.read(cx).menu_handle().toggle(window, cx);
                 }

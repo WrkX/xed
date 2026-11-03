@@ -204,7 +204,7 @@ impl ReleaseChannel {
 
     /// Returns the display name for this [`ReleaseChannel`].
     pub fn display_name(&self) -> &'static str {
-        "xed"
+        "Racoon"
     }
 
     /// Returns the programmatic name for this [`ReleaseChannel`].

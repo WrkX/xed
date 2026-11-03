@@ -45,9 +45,11 @@ actions!(
         ToggleStaged,
         /// Stage status entries between an anchor entry and the cursor.
         StageRange,
-        /// Stages only the selected changed lines into the Git index.
+        /// Stages only the selected changed lines into the Git index,
+        /// falling back to the line under the cursor when nothing is selected.
         StageSelectedRanges,
-        /// Unstages only the selected staged lines from the Git index.
+        /// Unstages only the selected staged lines from the Git index,
+        /// falling back to the line under the cursor when nothing is selected.
         UnstageSelectedRanges,
         /// Stages the current hunk and moves to the next one.
         StageAndNext,

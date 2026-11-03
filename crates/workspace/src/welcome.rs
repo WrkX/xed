@@ -448,9 +448,9 @@ impl Render for WelcomePage {
         };
 
         let welcome_label = if self.fallback_to_recent_projects {
-            "Welcome back to xed"
+            "Welcome back to Racoon"
         } else {
-            "Welcome to xed"
+            "Welcome to Racoon"
         };
 
         h_flex()

@@ -40,18 +40,26 @@ use ui::{
 use util::ResultExt;
 use util::paths::PathExt;
 use workspace::{
-    CloseWindow, ModalView, PathList, RecentWorkspace, SerializedWorkspaceLocation, Workspace,
-    WorkspaceDb, WorkspaceId,
+    CloseWindow, ModalView, PathList, ProjectGroupKey, RecentWorkspace, SerializedWorkspaceLocation,
+    Workspace, WorkspaceDb, WorkspaceId,
 };
 
 use zed_actions::agents_sidebar::FocusSidebarFilter;
 use zed_actions::editor::{MoveDown, MoveUp};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum ThreadFilter {
+pub enum ThreadFilter {
     #[default]
     All,
     ArchivedOnly,
+}
+
+/// Which projects' threads an archive view lists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ThreadScope {
+    #[default]
+    AllProjects,
+    OpenProjects,
 }
 
 #[derive(Clone)]
@@ -157,6 +165,7 @@ pub struct ThreadsArchiveView {
     archived_branch_names: HashMap<ThreadId, HashMap<PathBuf, String>>,
     _load_branch_names_task: Task<()>,
     thread_filter: ThreadFilter,
+    thread_scope: ThreadScope,
 }
 
 impl ThreadsArchiveView {
@@ -231,6 +240,7 @@ impl ThreadsArchiveView {
             archived_branch_names: HashMap::default(),
             _load_branch_names_task: Task::ready(()),
             thread_filter: ThreadFilter::All,
+            thread_scope: ThreadScope::AllProjects,
         };
 
         this.update_items(cx);
@@ -240,6 +250,22 @@ impl ThreadsArchiveView {
 
     pub fn has_selection(&self) -> bool {
         self.selection.is_some()
+    }
+
+    pub fn is_archived_only(&self) -> bool {
+        self.thread_filter == ThreadFilter::ArchivedOnly
+    }
+
+    /// Changes which threads this view lists and refreshes the list.
+    pub fn set_filter(
+        &mut self,
+        filter: ThreadFilter,
+        scope: ThreadScope,
+        cx: &mut Context<Self>,
+    ) {
+        self.thread_filter = filter;
+        self.thread_scope = scope;
+        self.update_items(cx);
     }
 
     pub fn clear_selection(&mut self) {
@@ -269,12 +295,19 @@ impl ThreadsArchiveView {
     }
 
     fn update_items(&mut self, cx: &mut Context<Self>) {
+        let open_project_keys = match self.thread_scope {
+            ThreadScope::AllProjects => None,
+            ThreadScope::OpenProjects => Some(self.open_project_keys(cx)),
+        };
         let store = ThreadMetadataStore::global(cx).read(cx);
 
         // If we're filtering to archived threads but none remain (e.g. the
         // user just deleted the last one), fall back to showing all threads
         // so they aren't stranded with an empty list and a disabled toggle.
+        // Views scoped to open projects keep the archived filter so that the
+        // empty state explains why nothing is listed.
         if self.thread_filter == ThreadFilter::ArchivedOnly
+            && open_project_keys.is_none()
             && store.archived_entries().next().is_none()
         {
             self.thread_filter = ThreadFilter::All;
@@ -286,6 +319,10 @@ impl ThreadsArchiveView {
             .filter(|t| match thread_filter {
                 ThreadFilter::All => true,
                 ThreadFilter::ArchivedOnly => t.archived,
+            })
+            .filter(|t| match &open_project_keys {
+                Some(keys) => Self::thread_in_open_project(t, keys),
+                None => true,
             })
             .sorted_by_cached_key(|t| t.created_at.unwrap_or(t.updated_at))
             .rev()
@@ -379,6 +416,22 @@ impl ThreadsArchiveView {
         }
 
         cx.notify();
+    }
+
+    fn open_project_keys(&self, cx: &App) -> Vec<ProjectGroupKey> {
+        self.workspace
+            .upgrade()
+            .and_then(|workspace| workspace.read(cx).multi_workspace().cloned())
+            .and_then(|multi_workspace| multi_workspace.upgrade())
+            .map(|multi_workspace| multi_workspace.read(cx).project_group_keys())
+            .unwrap_or_default()
+    }
+
+    fn thread_in_open_project(thread: &ThreadMetadata, keys: &[ProjectGroupKey]) -> bool {
+        keys.iter().any(|key| {
+            thread.main_worktree_paths() == key.path_list()
+                && thread.matches_remote_connection(key.host().as_ref())
+        })
     }
 
     fn reload_branch_names_if_threads_changed(&mut self, cx: &mut Context<Self>) {
@@ -960,8 +1013,15 @@ impl ThreadsArchiveView {
             .count();
 
         let has_archived_threads = {
+            let open_project_keys = match self.thread_scope {
+                ThreadScope::AllProjects => None,
+                ThreadScope::OpenProjects => Some(self.open_project_keys(cx)),
+            };
             let store = ThreadMetadataStore::global(cx).read(cx);
-            store.archived_entries().next().is_some()
+            store.archived_entries().any(|thread| match &open_project_keys {
+                Some(keys) => Self::thread_in_open_project(thread, keys),
+                None => true,
+            })
         };
 
         let count_label = if entry_count == 1 {
@@ -1065,6 +1125,12 @@ impl Render for ThreadsArchiveView {
         let content = if is_empty {
             let message = if has_query {
                 "No threads match your search."
+            } else if self.thread_scope == ThreadScope::OpenProjects
+                && self.thread_filter == ThreadFilter::ArchivedOnly
+            {
+                "No archived threads in open projects."
+            } else if self.thread_scope == ThreadScope::OpenProjects {
+                "No threads in open projects yet."
             } else {
                 "No threads yet."
             };

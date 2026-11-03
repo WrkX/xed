@@ -5710,9 +5710,32 @@ impl AgentPanel {
                     Some(ContextMenu::build(window, cx, |mut menu, _window, cx| {
                         menu = menu.context(menu_action_context.clone());
 
-                        if has_thread_messages {
-                            menu = menu.header("Current Thread");
+                        let follow_thread_view =
+                            conversation_view.as_ref().and_then(|conversation_view| {
+                                conversation_view.read(cx).root_thread_view()
+                            });
 
+                        if has_thread_messages || follow_thread_view.is_some() {
+                            menu = menu.header("Current Thread");
+                        }
+
+                        if let Some(thread_view) = follow_thread_view {
+                            let following = thread_view.read(cx).is_following(cx);
+                            let agent_name = thread_view.read(cx).agent_display_name.clone();
+                            let label = if following {
+                                format!("Stop Following {agent_name}")
+                            } else {
+                                format!("Follow {agent_name}")
+                            };
+
+                            menu = menu.entry(label, None, move |window, cx| {
+                                thread_view.update(cx, |thread_view, cx| {
+                                    thread_view.toggle_following(window, cx);
+                                });
+                            });
+                        }
+
+                        if has_thread_messages {
                             if let Some(conversation_view) = conversation_view.as_ref() {
                                 if can_regenerate_thread_title {
                                     menu = menu.entry("Regenerate Thread Title", None, {

@@ -480,7 +480,9 @@ impl ConfigOptionSelector {
         .truncate(true)
         .when(
             option.category == Some(acp::SessionConfigOptionCategory::Model),
-            |this| this.width(rems(8.0)),
+            |this| {
+                this.style(ButtonStyle::Filled).width(rems(8.0))
+            },
         )
         .end_icon(Icon::new(icon).size(IconSize::XSmall).color(Color::Muted))
         .disabled(self.setting_value)

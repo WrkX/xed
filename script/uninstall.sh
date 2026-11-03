@@ -105,7 +105,7 @@ linux() {
 }
 
 macos() {
-    app="xed.app"
+    app="Racoon.app"
     db_suffix="stable"
     app_id="dev.zed.Zed"
     case "$channel" in

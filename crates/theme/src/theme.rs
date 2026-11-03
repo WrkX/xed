@@ -46,7 +46,8 @@ pub use crate::styles::*;
 pub use crate::theme_settings_provider::*;
 pub use crate::ui_density::*;
 
-/// The name of the default dark theme.
+/// The name of the dark theme built into the theme crate, used as a fallback
+/// when no other theme is available (for example in tests).
 pub const DEFAULT_DARK_THEME: &str = "One Dark";
 
 /// Defines window border radius for platforms that use client side decorations.

@@ -11,7 +11,7 @@ channel=$(<crates/zed/RELEASE_CHANNEL)
 
 export CHANNEL="$channel"
 export ARCHIVE="$archive"
-export APP_NAME="xed"
+export APP_NAME="Racoon"
 if [[ "$channel" == "dev" ]]; then
     export APP_ID="dev.zed.ZedDev"
     export BRANDING_LIGHT="#99c1f1"

@@ -5609,7 +5609,7 @@ Available variables:
 | `fileStem`     | File name without extension (e.g. `main`)             |
 | `remoteName`   | Display name of the remote connection, if any         |
 | `remoteHost`   | Host of the remote connection, if any                 |
-| `appName`      | Application display name (`xed`)                      |
+| `appName`      | Application display name (`Racoon`)                   |
 | `branch`       | Git branch checked out in the active repository       |
 | `separator`    | Separator string, omitted when neighbors are empty    |
 

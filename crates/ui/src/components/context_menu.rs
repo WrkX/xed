@@ -222,6 +222,9 @@ pub struct ContextMenu {
     key_context: SharedString,
     _on_blur_subscription: Subscription,
     keep_open_on_confirm: bool,
+    /// Predicate that keeps the menu open while it holds, see
+    /// [`ContextMenu::keep_open_while`].
+    keep_open_while: Option<Rc<dyn Fn(&mut Window, &mut App) -> bool>>,
     fixed_width: Option<DefiniteLength>,
     spacing: ListItemSpacing,
     main_menu: Option<Entity<ContextMenu>>,
@@ -316,6 +319,10 @@ impl ContextMenu {
                         }
                     }
 
+                    if this.should_keep_open(window, cx) {
+                        return;
+                    }
+
                     if this.main_menu.is_none() {
                         if let SubmenuState::Open(open_submenu) = &this.submenu_state {
                             let submenu_focus = open_submenu.entity.read(cx).focus_handle.clone();
@@ -355,6 +362,7 @@ impl ContextMenu {
                     key_context: "menu".into(),
                     _on_blur_subscription,
                     keep_open_on_confirm: true,
+                    keep_open_while: None,
                     fixed_width: None,
                     spacing: ListItemSpacing::default(),
                     main_menu: None,
@@ -412,6 +420,10 @@ impl ContextMenu {
                             }
                         }
 
+                        if this.should_keep_open(window, cx) {
+                            return;
+                        }
+
                         if this.main_menu.is_none() {
                             if let SubmenuState::Open(open_submenu) = &this.submenu_state {
                                 let submenu_focus =
@@ -426,6 +438,7 @@ impl ContextMenu {
                     },
                 ),
                 keep_open_on_confirm: false,
+                keep_open_while: None,
                 fixed_width: None,
                 spacing: self.spacing,
                 main_menu: None,
@@ -854,6 +867,26 @@ impl ContextMenu {
         self
     }
 
+    /// Keeps the menu open while `predicate` returns `true`, even when it loses
+    /// focus or a click lands outside of its bounds.
+    ///
+    /// Menus hosting nested popovers (pickers, dropdowns, ...) need this: those
+    /// popovers are rendered in their own layer and take focus away from the menu,
+    /// which would otherwise be treated as a request to dismiss it.
+    pub fn keep_open_while(
+        mut self,
+        predicate: impl Fn(&mut Window, &mut App) -> bool + 'static,
+    ) -> Self {
+        self.keep_open_while = Some(Rc::new(predicate));
+        self
+    }
+
+    fn should_keep_open(&self, window: &mut Window, cx: &mut App) -> bool {
+        self.keep_open_while
+            .as_ref()
+            .is_some_and(|predicate| predicate(window, cx))
+    }
+
     pub fn trigger_end_slot_handler(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(entry) = self.selected_index.and_then(|ix| self.items.get(ix)) else {
             return;
@@ -1270,6 +1303,7 @@ impl ContextMenu {
                 key_context: "menu".into(),
                 _on_blur_subscription,
                 keep_open_on_confirm: false,
+                keep_open_while: None,
                 fixed_width: None,
                 spacing: ListItemSpacing::default(),
                 documentation_aside: None,
@@ -2142,6 +2176,10 @@ impl ContextMenu {
                     }
                 }
 
+                if context_menu.should_keep_open(window, cx) {
+                    return;
+                }
+
                 if context_menu.main_menu.is_none() {
                     if let SubmenuState::Open(open_submenu) = &context_menu.submenu_state {
                         let submenu_focus = open_submenu.entity.read(cx).focus_handle.clone();
@@ -2184,6 +2222,7 @@ impl ContextMenu {
             key_context: SharedString::from("menu"),
             _on_blur_subscription,
             keep_open_on_confirm: false,
+            keep_open_while: None,
             fixed_width: None,
             spacing: ListItemSpacing::default(),
             main_menu: None,
@@ -2344,6 +2383,10 @@ impl Render for ContextMenu {
                         }))
                         .on_mouse_down_out(cx.listener(
                             |this, event: &MouseDownEvent, window, cx| {
+                                if this.should_keep_open(window, cx) {
+                                    return;
+                                }
+
                                 if matches!(&this.submenu_state, SubmenuState::Open(_)) {
                                     if let Some(padded_bounds) = this.padded_submenu_bounds() {
                                         if padded_bounds.contains(&event.position) {
@@ -2718,5 +2761,178 @@ mod tests {
                 "Should wrap around to first selectable entry"
             );
         });
+    }
+
+    struct MenuHost {
+        menu: Entity<ContextMenu>,
+        other_focus: FocusHandle,
+    }
+
+    impl Render for MenuHost {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            v_flex()
+                .size_full()
+                .child(self.menu.clone())
+                .child(div().h(px(10.)).track_focus(&self.other_focus))
+        }
+    }
+
+    fn set_focus(cx: &mut VisualTestContext, focus_handle: &FocusHandle) {
+        cx.update(|window, cx| {
+            window.activate_window();
+            window.focus(focus_handle, cx);
+        });
+        // Focus listeners are only dispatched while drawing.
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        cx.run_until_parked();
+    }
+
+    /// Spawns a window hosting a context menu and a separately focusable element,
+    /// returning the menu's entity and the handle of that other element.
+    fn open_menu_window(
+        cx: &mut TestAppContext,
+        keep_open_while: impl Fn(&mut Window, &mut App) -> bool + 'static,
+    ) -> (Entity<ContextMenu>, FocusHandle, VisualTestContext) {
+        let window = cx
+            .update(|cx| {
+                cx.open_window(Default::default(), move |window, cx| {
+                    let menu = ContextMenu::build(window, cx, move |menu, _, _| {
+                        menu.keep_open_while(keep_open_while)
+                            .entry("Entry", None, |_, _| {})
+                    });
+                    cx.new(|cx| MenuHost {
+                        menu,
+                        other_focus: cx.focus_handle(),
+                    })
+                })
+            })
+            .expect("open menu window");
+
+        let host = window.root(cx).expect("host root");
+        let (menu, other_focus) = cx.update(|cx| {
+            let host = host.read(cx);
+            (host.menu.clone(), host.other_focus.clone())
+        });
+        let cx = VisualTestContext::from_window(window.into(), cx);
+        (menu, other_focus, cx)
+    }
+
+    #[gpui::test]
+    fn menu_dismisses_on_blur(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = settings::SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+        });
+
+        let (menu, other_focus, mut cx) = open_menu_window(cx, |_, _| false);
+
+        let dismissals = Rc::new(Cell::new(0));
+        let _dismissals_subscription = cx.update(|_, cx| {
+            let dismissals = dismissals.clone();
+            cx.subscribe(&menu, move |_, _: &DismissEvent, _| {
+                dismissals.set(dismissals.get() + 1)
+            })
+        });
+
+        let menu_focus = cx.update(|_, cx| menu.focus_handle(cx));
+        set_focus(&mut cx, &menu_focus);
+        set_focus(&mut cx, &other_focus);
+        assert_eq!(
+            dismissals.get(),
+            1,
+            "the menu dismisses when it loses focus"
+        );
+    }
+
+    #[gpui::test]
+    fn keep_open_while_suppresses_dismissal(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = settings::SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+        });
+
+        let should_keep_open = Rc::new(Cell::new(true));
+        let keep_open = {
+            let should_keep_open = should_keep_open.clone();
+            move |_: &mut Window, _: &mut App| should_keep_open.get()
+        };
+        let (menu, other_focus, mut cx) = open_menu_window(cx, keep_open);
+
+        let dismissals = Rc::new(Cell::new(0));
+        let _dismissals_subscription = cx.update(|_, cx| {
+            let dismissals = dismissals.clone();
+            cx.subscribe(&menu, move |_, _: &DismissEvent, _| {
+                dismissals.set(dismissals.get() + 1)
+            })
+        });
+
+        let menu_focus = cx.update(|_, cx| menu.focus_handle(cx));
+        set_focus(&mut cx, &menu_focus);
+        set_focus(&mut cx, &other_focus);
+        assert_eq!(
+            dismissals.get(),
+            0,
+            "the menu should stay open while the predicate holds"
+        );
+
+        should_keep_open.set(false);
+        set_focus(&mut cx, &menu_focus);
+        set_focus(&mut cx, &other_focus);
+        assert_eq!(
+            dismissals.get(),
+            1,
+            "the menu should dismiss once the predicate no longer holds"
+        );
+    }
+
+    #[gpui::test]
+    fn keep_open_while_suppresses_outside_click_dismissal(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = settings::SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+        });
+
+        let should_keep_open = Rc::new(Cell::new(true));
+        let keep_open = {
+            let should_keep_open = should_keep_open.clone();
+            move |_: &mut Window, _: &mut App| should_keep_open.get()
+        };
+        let (menu, _other_focus, mut cx) = open_menu_window(cx, keep_open);
+
+        let dismissals = Rc::new(Cell::new(0));
+        let _dismissals_subscription = cx.update(|_, cx| {
+            let dismissals = dismissals.clone();
+            cx.subscribe(&menu, move |_, _: &DismissEvent, _| {
+                dismissals.set(dismissals.get() + 1)
+            })
+        });
+
+        let outside = gpui::point(px(400.), px(300.));
+
+        cx.update(|window, cx| {
+            window.activate_window();
+            window.draw(cx).clear(cx);
+        });
+        cx.simulate_mouse_down(outside, MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(
+            dismissals.get(),
+            0,
+            "clicking outside should not dismiss the menu while the predicate holds"
+        );
+
+        should_keep_open.set(false);
+        cx.simulate_mouse_down(outside, MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(
+            dismissals.get(),
+            1,
+            "clicking outside should dismiss the menu once the predicate no longer holds"
+        );
     }
 }

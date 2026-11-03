@@ -6,8 +6,10 @@ use crate::{
     actions::{Format, FormatSelections},
     selections_collection::SelectionsCollection,
 };
+use collections::HashMap;
 use gpui::prelude::FluentBuilder;
 use gpui::{Context, DismissEvent, Entity, Focusable as _, Pixels, Point, Subscription, Window};
+use multi_buffer::AnchorRangeExt as _;
 use project::DisableAiSettings;
 use std::ops::Range;
 use text::PointUtf16;
@@ -217,6 +219,80 @@ pub fn deploy_context_menu(
                         .is_some()
                 });
 
+        let selected_ranges = editor
+            .selections
+            .disjoint_anchor_ranges()
+            .filter(|range| range.start != range.end)
+            .collect::<Vec<_>>();
+        let has_selection = !selected_ranges.is_empty();
+        let (can_stage, can_unstage) = if has_git_repo {
+            let target_ranges = if has_selection {
+                selected_ranges
+            } else {
+                // With no selection, act on the line that was right-clicked.
+                let clicked_point = point.to_point(&display_map);
+                let line_start = language::Point::new(clicked_point.row, 0);
+                let line_end =
+                    language::Point::new(clicked_point.row + 1, 0).min(buffer.max_point());
+                if line_start == line_end {
+                    Vec::new()
+                } else {
+                    vec![buffer.anchor_before(line_start)..buffer.anchor_after(line_end)]
+                }
+            };
+
+            let mut ranges_by_buffer =
+                HashMap::<text::BufferId, Vec<Range<text::Anchor>>>::default();
+            for range in &target_ranges {
+                for (buffer_snapshot, buffer_range, _) in
+                    buffer.range_to_buffer_ranges(range.to_offset(buffer))
+                {
+                    ranges_by_buffer
+                        .entry(buffer_snapshot.remote_id())
+                        .or_default()
+                        .push(
+                            buffer_snapshot.anchor_before(buffer_range.start.0)
+                                ..buffer_snapshot.anchor_after(buffer_range.end.0),
+                        );
+                }
+            }
+
+            let multibuffer = editor.buffer().read(cx);
+            let mut stage = false;
+            let mut unstage = false;
+            for (buffer_id, buffer_ranges) in ranges_by_buffer {
+                let Some(diff) = multibuffer.diff_for(buffer_id) else {
+                    continue;
+                };
+                let Some(operations) = diff.read(cx).operations() else {
+                    continue;
+                };
+                let Some(buffer_entity) = multibuffer.buffer(buffer_id) else {
+                    continue;
+                };
+
+                stage |= operations.can_stage_selected_ranges(
+                    diff.clone(),
+                    Some(buffer_entity.clone()),
+                    &buffer_ranges,
+                    cx,
+                );
+                unstage |= operations.can_unstage_selected_ranges(
+                    diff,
+                    Some(buffer_entity),
+                    &buffer_ranges,
+                    cx,
+                );
+
+                if stage && unstage {
+                    break;
+                }
+            }
+            (stage, unstage)
+        } else {
+            (false, false)
+        };
+
         let evaluate_selection = window.is_action_available(&EvaluateSelectedText, cx);
         let run_to_cursor = window.is_action_available(&RunToCursor, cx);
         let format_selections = window.is_action_available(&FormatSelections, cx);
@@ -321,14 +397,29 @@ pub fn deploy_context_menu(
                     "Copy Permalink to Line",
                     Box::new(CopyPermalinkToLine),
                 )
-                .when(has_git_repo && has_selections, |builder| {
+                .when(can_stage || can_unstage, |builder| {
                     builder
                         .separator()
-                        .action("Stage Selected Ranges", Box::new(git::StageSelectedRanges))
-                        .action(
-                            "Unstage Selected Ranges",
-                            Box::new(git::UnstageSelectedRanges),
-                        )
+                        .when(can_stage, |builder| {
+                            builder.action(
+                                if has_selection {
+                                    "Stage Selected Ranges"
+                                } else {
+                                    "Stage Line"
+                                },
+                                Box::new(git::StageSelectedRanges),
+                            )
+                        })
+                        .when(can_unstage, |builder| {
+                            builder.action(
+                                if has_selection {
+                                    "Unstage Selected Ranges"
+                                } else {
+                                    "Unstage Line"
+                                },
+                                Box::new(git::UnstageSelectedRanges),
+                            )
+                        })
                 })
                 .action_disabled_when(
                     !has_git_repo,
@@ -468,5 +559,104 @@ mod tests {
         cx.run_until_parked();
 
         assert!(cx.debug_bounds("MENU_ITEM-Copy").is_some());
+    }
+
+    #[gpui::test]
+    async fn test_mouse_context_menu_git_range_actions(cx: &mut gpui::TestAppContext) {
+        init_test(cx, |_| {});
+
+        let mut cx = EditorTestContext::new(cx).await;
+
+        let deploy_on_line = |cx: &mut EditorTestContext, head: &str, index: &str, state: &str| {
+            cx.set_head_text(head);
+            cx.set_index_text(index);
+            cx.set_state(state);
+            cx.run_until_parked();
+
+            let point = cx.display_point(state);
+            cx.update_editor(|editor, window, cx| {
+                deploy_context_menu(editor, Some(Default::default()), point, window, cx);
+            });
+            cx.run_until_parked();
+        };
+
+        // Unstaged change: only staging applies.
+        deploy_on_line(
+            &mut cx,
+            "one\ntwo\nthree\n",
+            "one\ntwo\nthree\n",
+            "one\nTWˇO\nthree\n",
+        );
+        assert!(cx.debug_bounds("MENU_ITEM-Stage Line").is_some());
+        assert!(cx.debug_bounds("MENU_ITEM-Unstage Line").is_none());
+
+        // Fully staged change: only unstaging applies.
+        deploy_on_line(
+            &mut cx,
+            "one\ntwo\nthree\n",
+            "one\nTWO\nthree\n",
+            "one\nTWˇO\nthree\n",
+        );
+        assert!(cx.debug_bounds("MENU_ITEM-Stage Line").is_none());
+        assert!(cx.debug_bounds("MENU_ITEM-Unstage Line").is_some());
+
+        // Partially staged hunk: clicking the already-staged line offers
+        // unstaging.
+        deploy_on_line(
+            &mut cx,
+            "one\ntwo\nthree\n",
+            "one\nTWO\nthree\n",
+            "one\nTWˇO\nTHREE\n",
+        );
+        assert!(cx.debug_bounds("MENU_ITEM-Stage Line").is_none());
+        assert!(cx.debug_bounds("MENU_ITEM-Unstage Line").is_some());
+
+        // Partially staged hunk: clicking the unstaged line offers staging.
+        deploy_on_line(
+            &mut cx,
+            "one\ntwo\nthree\n",
+            "one\nTWO\nthree\n",
+            "one\nTWO\nTHRˇEE\n",
+        );
+        assert!(cx.debug_bounds("MENU_ITEM-Stage Line").is_some());
+        assert!(cx.debug_bounds("MENU_ITEM-Unstage Line").is_none());
+
+        // Partially staged hunk: selecting both the staged and unstaged lines
+        // offers both actions.
+        deploy_on_line(
+            &mut cx,
+            "one\ntwo\nthree\n",
+            "one\nTWO\nthree\n",
+            "one\n«TWO\nTHREE\nˇ»",
+        );
+        assert!(cx.debug_bounds("MENU_ITEM-Stage Selected Ranges").is_some());
+        assert!(
+            cx.debug_bounds("MENU_ITEM-Unstage Selected Ranges")
+                .is_some()
+        );
+
+        // Mixed selection spanning a staged hunk and an unstaged hunk: both
+        // actions apply.
+        deploy_on_line(
+            &mut cx,
+            "one\ntwo\nthree\nfour\nfive\n",
+            "one\ntwo\nthree\nFOUR\nfive\n",
+            "one\n«TWO\nthree\nFOUR\nˇ»five\n",
+        );
+        assert!(cx.debug_bounds("MENU_ITEM-Stage Selected Ranges").is_some());
+        assert!(
+            cx.debug_bounds("MENU_ITEM-Unstage Selected Ranges")
+                .is_some()
+        );
+
+        // Unchanged line: neither action applies.
+        deploy_on_line(
+            &mut cx,
+            "one\nTWO\nthree\n",
+            "one\nTWO\nthree\n",
+            "one\nTWˇO\nthree\n",
+        );
+        assert!(cx.debug_bounds("MENU_ITEM-Stage Line").is_none());
+        assert!(cx.debug_bounds("MENU_ITEM-Unstage Line").is_none());
     }
 }

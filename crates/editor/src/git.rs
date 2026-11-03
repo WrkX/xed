@@ -1621,17 +1621,35 @@ impl Editor {
         self.do_stage_or_unstage_and_next(true, window, cx);
     }
 
+    /// The ranges a stage/unstage action should operate on. Prefers non-empty
+    /// selections, falling back to the line under the cursor so that acting on
+    /// a single line does not require selecting it first.
+    fn selected_or_cursor_line_ranges(&self, cx: &App) -> Vec<Range<Anchor>> {
+        let mut ranges = self
+            .selections
+            .disjoint_anchor_ranges()
+            .filter(|range| range.start != range.end)
+            .collect::<Vec<_>>();
+        if ranges.is_empty() {
+            let buffer = self.buffer.read(cx).snapshot(cx);
+            let cursor = self.selections.newest_anchor().head();
+            let row = cursor.to_point(&buffer).row;
+            let line_start = Point::new(row, 0);
+            let line_end = Point::new(row + 1, 0).min(buffer.max_point());
+            if line_start != line_end {
+                ranges.push(buffer.anchor_before(line_start)..buffer.anchor_after(line_end));
+            }
+        }
+        ranges
+    }
+
     pub(super) fn stage_selected_ranges(
         &mut self,
         _: &::git::StageSelectedRanges,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let ranges = self
-            .selections
-            .disjoint_anchor_ranges()
-            .filter(|range| range.start != range.end)
-            .collect::<Vec<_>>();
+        let ranges = self.selected_or_cursor_line_ranges(cx);
         if ranges.is_empty() {
             return;
         }
@@ -1695,11 +1713,7 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let ranges = self
-            .selections
-            .disjoint_anchor_ranges()
-            .filter(|range| range.start != range.end)
-            .collect::<Vec<_>>();
+        let ranges = self.selected_or_cursor_line_ranges(cx);
         if ranges.is_empty() {
             return;
         }

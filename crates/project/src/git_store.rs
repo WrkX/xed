@@ -838,6 +838,40 @@ impl DiffOperations for GitDiffOperations {
         result.and_then(|result| result).log_err();
     }
 
+    fn can_stage_selected_ranges(
+        &self,
+        diff: Entity<BufferDiff>,
+        buffer: Option<Entity<Buffer>>,
+        buffer_ranges: &[Range<Anchor>],
+        cx: &App,
+    ) -> bool {
+        let Some(buffer) = buffer else {
+            return false;
+        };
+        let Some(project) = self.project.upgrade() else {
+            return false;
+        };
+        match self.kind {
+            DiffKind::Unstaged => {
+                project
+                    .read(cx)
+                    .can_stage_selected_ranges(buffer, diff, buffer_ranges, cx)
+            }
+            DiffKind::Uncommitted => {
+                let Some(secondary_diff) = diff.read(cx).secondary_diff() else {
+                    return false;
+                };
+                project.read(cx).can_stage_selected_ranges(
+                    buffer,
+                    secondary_diff,
+                    buffer_ranges,
+                    cx,
+                )
+            }
+            _ => false,
+        }
+    }
+
     fn unstage_selected_ranges(
         &self,
         diff: Entity<BufferDiff>,
@@ -854,6 +888,34 @@ impl DiffOperations for GitDiffOperations {
             _ => Ok(()),
         });
         result.and_then(|result| result).log_err();
+    }
+
+    fn can_unstage_selected_ranges(
+        &self,
+        diff: Entity<BufferDiff>,
+        buffer: Option<Entity<Buffer>>,
+        buffer_ranges: &[Range<Anchor>],
+        cx: &App,
+    ) -> bool {
+        let Some(project) = self.project.upgrade() else {
+            return false;
+        };
+        match self.kind {
+            DiffKind::Staged => {
+                project
+                    .read(cx)
+                    .can_unstage_staged_selected_ranges(diff, buffer_ranges, cx)
+            }
+            DiffKind::Uncommitted => {
+                let Some(buffer) = buffer else {
+                    return false;
+                };
+                project
+                    .read(cx)
+                    .can_unstage_selected_ranges(buffer, diff, buffer_ranges, cx)
+            }
+            _ => false,
+        }
     }
 
     fn unstage(
@@ -2022,6 +2084,31 @@ impl GitStore {
         Ok(())
     }
 
+    pub fn can_stage_selected_ranges(
+        &self,
+        buffer: Entity<Buffer>,
+        unstaged_diff: Entity<BufferDiff>,
+        worktree_ranges: &[Range<Anchor>],
+        cx: &App,
+    ) -> bool {
+        if worktree_ranges.is_empty() {
+            return false;
+        }
+        let buffer_snapshot = buffer.read(cx).snapshot();
+        if !buffer_snapshot
+            .file()
+            .is_some_and(|file| file.disk_state().exists())
+        {
+            return false;
+        }
+        let unstaged_snapshot = unstaged_diff.read(cx).snapshot(cx);
+        if buffer_snapshot.version() != unstaged_snapshot.buffer_version() {
+            return false;
+        }
+        selected_index_edits(&unstaged_snapshot, worktree_ranges, &buffer_snapshot)
+            .is_ok_and(|edits| !edits.is_empty())
+    }
+
     pub fn stage_selected_ranges(
         &mut self,
         buffer: Entity<Buffer>,
@@ -2094,6 +2181,36 @@ impl GitStore {
 
         self.write_optimistic_index(buffer_id, cx);
         Ok(())
+    }
+
+    pub fn can_unstage_selected_ranges(
+        &self,
+        buffer: Entity<Buffer>,
+        uncommitted_diff: Entity<BufferDiff>,
+        worktree_ranges: &[Range<Anchor>],
+        cx: &App,
+    ) -> bool {
+        if worktree_ranges.is_empty() {
+            return false;
+        }
+        let buffer_snapshot = buffer.read(cx).snapshot();
+        let uncommitted_snapshot = uncommitted_diff.read(cx).snapshot(cx);
+        if buffer_snapshot.version() != uncommitted_snapshot.buffer_version() {
+            return false;
+        }
+        let Some(unstaged_snapshot) = uncommitted_snapshot.secondary_diff() else {
+            return false;
+        };
+        if buffer_snapshot.version() != unstaged_snapshot.buffer_version() {
+            return false;
+        }
+        selected_unstage_index_edits(
+            &uncommitted_snapshot,
+            unstaged_snapshot,
+            worktree_ranges,
+            &buffer_snapshot,
+        )
+        .is_ok_and(|edits| !edits.is_empty())
     }
 
     pub fn unstage_selected_ranges(
@@ -2169,6 +2286,24 @@ impl GitStore {
         });
         self.write_optimistic_index(buffer_id, cx);
         Ok(())
+    }
+
+    pub fn can_unstage_staged_selected_ranges(
+        &self,
+        staged_diff: Entity<BufferDiff>,
+        index_ranges: &[Range<Anchor>],
+        cx: &App,
+    ) -> bool {
+        if index_ranges.is_empty() {
+            return false;
+        }
+        let staged_snapshot = staged_diff.read(cx).snapshot(cx);
+        selected_unstage_staged_index_edits(
+            &staged_snapshot,
+            index_ranges,
+            staged_snapshot.buffer_snapshot(),
+        )
+        .is_ok_and(|edits| !edits.is_empty())
     }
 
     pub fn unstage_staged_selected_ranges(

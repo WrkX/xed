@@ -74,6 +74,7 @@ impl Render for ModelSelectorPopover {
             self.selector.clone(),
             Button::new("active-model", model_name)
                 .label_size(LabelSize::Small)
+                .style(ButtonStyle::Filled)
                 .color(color)
                 .truncate(true)
                 .width(rems(8.0))

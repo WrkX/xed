@@ -3386,6 +3386,23 @@ impl Project {
         })
     }
 
+    /// Returns whether staging the changed lines covered by `worktree_ranges`
+    /// would modify the index.
+    pub fn can_stage_selected_ranges(
+        &self,
+        buffer: Entity<Buffer>,
+        unstaged_diff: Entity<BufferDiff>,
+        worktree_ranges: &[Range<Anchor>],
+        cx: &App,
+    ) -> bool {
+        self.git_store.read(cx).can_stage_selected_ranges(
+            buffer,
+            unstaged_diff,
+            worktree_ranges,
+            cx,
+        )
+    }
+
     /// Stages only the changed lines covered by `worktree_ranges` in the worktree buffer.
     pub fn stage_selected_ranges(
         &mut self,
@@ -3402,6 +3419,21 @@ impl Project {
         })
     }
 
+    pub fn can_unstage_selected_ranges(
+        &self,
+        buffer: Entity<Buffer>,
+        uncommitted_diff: Entity<BufferDiff>,
+        worktree_ranges: &[Range<Anchor>],
+        cx: &App,
+    ) -> bool {
+        self.git_store.read(cx).can_unstage_selected_ranges(
+            buffer,
+            uncommitted_diff,
+            worktree_ranges,
+            cx,
+        )
+    }
+
     pub fn unstage_selected_ranges(
         &mut self,
         buffer: Entity<Buffer>,
@@ -3415,6 +3447,17 @@ impl Project {
         self.git_store.update(cx, |git_store, cx| {
             git_store.unstage_selected_ranges(buffer, uncommitted_diff, worktree_ranges, cx)
         })
+    }
+
+    pub fn can_unstage_staged_selected_ranges(
+        &self,
+        staged_diff: Entity<BufferDiff>,
+        index_ranges: &[Range<Anchor>],
+        cx: &App,
+    ) -> bool {
+        self.git_store
+            .read(cx)
+            .can_unstage_staged_selected_ranges(staged_diff, index_ranges, cx)
     }
 
     pub fn unstage_staged_selected_ranges(

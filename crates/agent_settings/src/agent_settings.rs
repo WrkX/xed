@@ -1092,6 +1092,33 @@ mod tests {
     }
 
     #[gpui::test]
+    fn test_tool_permissions_default_follows_user_settings(cx: &mut gpui::App) {
+        let store = SettingsStore::test(cx);
+        cx.set_global(store);
+        project::DisableAiSettings::register(cx);
+        AgentSettings::register(cx);
+
+        assert_eq!(
+            AgentSettings::get_global(cx).tool_permissions.default,
+            ToolPermissionMode::Confirm
+        );
+
+        SettingsStore::update_global(cx, |store, cx| {
+            store
+                .set_user_settings(
+                    r#"{ "agent": { "tool_permissions": { "default": "allow", "tools": {} } } }"#,
+                    cx,
+                )
+                .unwrap();
+        });
+
+        assert_eq!(
+            AgentSettings::get_global(cx).tool_permissions.default,
+            ToolPermissionMode::Allow
+        );
+    }
+
+    #[gpui::test]
     fn test_prevent_idle_sleep_defaults_to_true_and_follows_user_settings(cx: &mut gpui::App) {
         let store = SettingsStore::test(cx);
         cx.set_global(store);
