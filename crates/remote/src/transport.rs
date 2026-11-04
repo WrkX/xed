@@ -280,6 +280,24 @@ async fn build_remote_server_from_source(
         }
     }
 
+    // This fork publishes prebuilt development remote servers as GitHub release
+    // assets. Prefer downloading those over compiling from a local checkout,
+    // unless the build-from-source flow is requested explicitly.
+    if std::env::var_os("ZED_BUILD_REMOTE_SERVER").is_none()
+        && matches!(
+            cx.update(|cx| release_channel::ReleaseChannel::try_global(cx)),
+            Some(release_channel::ReleaseChannel::Dev)
+        )
+        && cx
+            .update(|cx| release_channel::AppCommitSha::try_global(cx))
+            .is_some()
+        && let Ok(Some(_)) = delegate
+            .get_download_url(*platform, release_channel::ReleaseChannel::Dev, None, cx)
+            .await
+    {
+        return Ok(None);
+    }
+
     // By default, we make building remote server from source opt-out and we do not force artifact compression
     // for quicker builds.
     let build_remote_server =

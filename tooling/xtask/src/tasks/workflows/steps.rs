@@ -753,6 +753,7 @@ pub fn upload_artifact(
 pub fn upload_artifact_with_retry(
     artifact_name: impl Into<String>,
     path: impl Into<String>,
+    retention_days: Option<u32>,
 ) -> Vec<Step<Use>> {
     let artifact_name = artifact_name.into();
     let path = path.into();
@@ -774,7 +775,10 @@ pub fn upload_artifact_with_retry(
         .add_with(("name", artifact_name.clone()))
         .add_with(("path", path.clone()))
         .add_with(("if-no-files-found", "error"))
-        .add_with(("overwrite", true));
+        .add_with(("overwrite", true))
+        .when_some(retention_days, |step, days| {
+            step.add_with(("retention-days", days.to_string()))
+        });
 
     let first = base
         .clone()

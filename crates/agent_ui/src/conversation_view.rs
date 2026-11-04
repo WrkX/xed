@@ -7658,6 +7658,42 @@ pub(crate) mod tests {
     }
 
     #[gpui::test]
+    async fn test_scroll_to_bottom_button_stacks_above_activity_bar(cx: &mut TestAppContext) {
+        init_test(cx);
+        let connection = StubAgentConnection::new();
+        connection.set_next_prompt_updates(vec![acp_v1::SessionUpdate::AgentMessageChunk(
+            acp_v1::ContentChunk::new("Finished".into()),
+        )]);
+        let (conversation_view, cx) =
+            setup_full_size_conversation_and_send(connection, "Check files", cx).await;
+
+        active_thread(&conversation_view, cx).update_in(cx, |view, window, cx| {
+            view.add_to_queue(
+                vec![acp_v2::ContentBlock::Text(acp_v2::TextContent::new(
+                    "queued".to_string(),
+                ))],
+                vec![],
+                window,
+                cx,
+            );
+            view.list_state.set_follow_mode(gpui::FollowMode::Normal);
+            view.scroll_to_top(cx);
+        });
+        cx.run_until_parked();
+
+        let button = cx
+            .debug_bounds("scroll-to-bottom")
+            .expect("scroll-to-bottom button should render when scrolled away from the tail");
+        let activity_bar = cx
+            .debug_bounds("activity-bar")
+            .expect("queued message should render the activity bar");
+        assert!(
+            button.bottom() <= activity_bar.top(),
+            "scroll-to-bottom button ({button:?}) should stack above the activity bar ({activity_bar:?})"
+        );
+    }
+
+    #[gpui::test]
     async fn test_tool_file_heading_opens_full_path_and_line(cx: &mut TestAppContext) {
         init_test(cx);
         let (conversation_view, cx) =

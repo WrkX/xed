@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+
+# Downloads the remote development server built by the "remote-server" GitHub
+# Actions workflow and installs it where ZED_COPY_REMOTE_SERVER expects it.
+# This is a manual fallback; dev builds normally download the server from the
+# release for their own commit automatically.
+# Trigger the workflow first, e.g.:
+#   gh workflow run remote-server.yml -R WrkX/xed
+# Then run:
+#   script/fetch-remote-server [--arch aarch64]
+
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: script/fetch-remote-server [options]
+
+Downloads the linux remote server for the current commit from the fork's
+GitHub release and installs it at $ZED_COPY_REMOTE_SERVER (or the default
+target path).
+
+Options:
+  --os <linux>                 Remote OS (only linux is published)
+  --arch <x86_64|aarch64>      Remote architecture (default: x86_64)
+  -h, --help                   Show this help
+EOF
+}
+
+os=linux
+arch=x86_64
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --os)
+            os="$2"
+            shift 2
+            ;;
+        --arch)
+            arch="$2"
+            shift 2
+            ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "unknown argument: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+case "$os-$arch" in
+    linux-x86_64)
+        triple=x86_64-unknown-linux-musl
+        ;;
+    linux-aarch64)
+        triple=aarch64-unknown-linux-musl
+        ;;
+    *)
+        echo "unsupported platform: $os-$arch" >&2
+        exit 1
+        ;;
+esac
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+repo=$(git -C "$repo_root" remote get-url origin)
+repo=${repo#git@github.com:}
+repo=${repo#https://github.com/}
+repo=${repo%.git}
+
+asset="zed-remote-server-$os-$arch.gz"
+tag="remote-server-$(git -C "$repo_root" rev-parse HEAD)"
+tmp_dir=$(mktemp -d)
+trap 'rm -rf "$tmp_dir"' EXIT
+
+echo "Downloading $asset from $tag in $repo"
+gh release download "$tag" \
+    --repo "$repo" \
+    --pattern "$asset" \
+    --dir "$tmp_dir" \
+    --clobber
+
+destination=${ZED_COPY_REMOTE_SERVER:-"$repo_root/target/remote_server/$triple/release/remote_server"}
+mkdir -p "$(dirname "$destination")"
+gunzip -c "$tmp_dir/$asset" >"$destination"
+chmod 755 "$destination"
+
+file "$destination"
+echo "Installed remote server at $destination"

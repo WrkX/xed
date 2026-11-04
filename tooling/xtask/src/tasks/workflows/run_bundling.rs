@@ -16,14 +16,14 @@ use indoc::indoc;
 
 pub fn run_bundling() -> Workflow {
     let bundle = ReleaseBundleJobs {
-        linux_aarch64: bundle_linux(Arch::AARCH64, None, false, &[]),
-        linux_x86_64: bundle_linux(Arch::X86_64, None, false, &[]),
+        linux_aarch64: bundle_linux(Arch::AARCH64, None, false, &[], None),
+        linux_x86_64: bundle_linux(Arch::X86_64, None, false, &[], None),
         bwrap_linux_aarch64: build_static_bwrap(Arch::AARCH64, &[]),
         bwrap_linux_x86_64: build_static_bwrap(Arch::X86_64, &[]),
-        mac_aarch64: bundle_mac(Arch::AARCH64, None, &[]),
-        mac_x86_64: bundle_mac(Arch::X86_64, None, &[]),
-        windows_aarch64: bundle_windows(Arch::AARCH64, None, &[]),
-        windows_x86_64: bundle_windows(Arch::X86_64, None, &[]),
+        mac_aarch64: bundle_mac(Arch::AARCH64, None, &[], None),
+        mac_x86_64: bundle_mac(Arch::X86_64, None, &[], None),
+        windows_aarch64: bundle_windows(Arch::AARCH64, None, &[], None),
+        windows_x86_64: bundle_windows(Arch::X86_64, None, &[], None),
     };
     named::workflow()
         .with_minimal_permissions()
@@ -68,6 +68,7 @@ pub(crate) fn bundle_mac(
     arch: Arch,
     release_channel: Option<ReleaseChannel>,
     deps: &[&NamedJob],
+    retention_days: Option<u32>,
 ) -> NamedJob {
     pub fn print_macos_toolchain() -> Step<Run> {
         named::bash(indoc! {r#"
@@ -122,6 +123,7 @@ pub(crate) fn bundle_mac(
                         format!("target/{target}/release/{artifact_name}"),
                         format!("target/{remote_server_artifact_name}"),
                     ],
+                    retention_days,
                 )
             }),
     }
@@ -137,14 +139,18 @@ pub fn upload_artifact(path: &str) -> UploadArtifactStep {
 /// A single `actions/upload-artifact` step occasionally fails with a transient
 /// `CreateArtifact ... ETIMEDOUT` from GitHub's artifact service, which would
 /// otherwise lose the built artifact (and, for release builds, fail the job).
-fn add_uploads(job: Job, paths: impl IntoIterator<Item = String>) -> Job {
+fn add_uploads(
+    job: Job,
+    paths: impl IntoIterator<Item = String>,
+    retention_days: Option<u32>,
+) -> Job {
     paths.into_iter().fold(job, |job, path| {
         let artifact_name = Path::new(&path)
             .file_name()
             .and_then(|name| name.to_str())
             .expect("artifact paths should have a file name")
             .to_owned();
-        steps::upload_artifact_with_retry(artifact_name, path)
+        steps::upload_artifact_with_retry(artifact_name, path, retention_days)
             .into_iter()
             .fold(job, |job, step| job.add_step(step))
     })
@@ -199,6 +205,7 @@ pub(crate) fn bundle_linux(
     release_channel: Option<ReleaseChannel>,
     require_sentry: bool,
     deps: &[&NamedJob],
+    retention_days: Option<u32>,
 ) -> NamedJob {
     let platform = Platform::Linux;
     let artifact_name = match arch {
@@ -236,6 +243,7 @@ pub(crate) fn bundle_linux(
                         format!("target/release/{artifact_name}"),
                         format!("target/{remote_server_artifact_name}"),
                     ],
+                    retention_days,
                 )
             }),
     }
@@ -245,6 +253,7 @@ pub(crate) fn bundle_windows(
     arch: Arch,
     release_channel: Option<ReleaseChannel>,
     deps: &[&NamedJob],
+    retention_days: Option<u32>,
 ) -> NamedJob {
     let platform = Platform::Windows;
     pub fn bundle_windows(arch: Arch) -> Step<Run> {
@@ -285,6 +294,7 @@ pub(crate) fn bundle_windows(
                         format!("target/{artifact_name}"),
                         format!("target/{remote_server_artifact_name}"),
                     ],
+                    retention_days,
                 )
             }),
     }

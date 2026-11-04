@@ -4272,6 +4272,7 @@ impl ThreadView {
             cx.theme().window_background_appearance() == gpui::WindowBackgroundAppearance::Opaque;
 
         h_flex()
+            .debug_selector(|| "activity-bar".into())
             .w_full()
             .px_3()
             .pt_3()
@@ -5626,7 +5627,6 @@ impl ThreadView {
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
         let has_messages = self.list_state.item_count() > 0;
-        let show_scroll_to_bottom = has_messages && !self.list_state.is_following_tail();
         let composer_is_read_only = self.message_editor.read(cx).editor().read(cx).read_only(cx);
         let discard_draft_button = composer_is_read_only.then(|| {
             div()
@@ -5646,7 +5646,6 @@ impl ThreadView {
         });
 
         h_flex()
-            .relative()
             .p_3()
             .flex_none()
             .justify_center()
@@ -5769,27 +5768,33 @@ impl ThreadView {
                             ),
                     ),
             )
-            .when(show_scroll_to_bottom, |this| {
-                this.child(
-                    div().absolute().right_5().bottom_full().child(
-                        IconButton::new("scroll-to-bottom", IconName::ArrowDown)
-                            .icon_size(IconSize::Medium)
-                            .icon_color(Color::Default)
-                            .shape(ui::IconButtonShape::Square)
-                            .style(ButtonStyle::Outlined)
-                            .layer(ElevationIndex::ElevatedSurface)
-                            .tooltip(Tooltip::for_action_title(
-                                "Scroll to Bottom",
-                                &ScrollOutputToBottom,
-                            ))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.scroll_to_end(cx);
-                                this.list_state.set_follow_mode(gpui::FollowMode::Tail);
-                            })),
-                    ),
-                )
-            })
             .into_any()
+    }
+
+    fn render_scroll_to_bottom_button(&self, cx: &Context<Self>) -> impl IntoElement {
+        div()
+            .debug_selector(|| "scroll-to-bottom".into())
+            .relative()
+            .h_0()
+            .w_full()
+            .child(
+                div().absolute().right_5().bottom_0().child(
+                    IconButton::new("scroll-to-bottom", IconName::ArrowDown)
+                        .icon_size(IconSize::Medium)
+                        .icon_color(Color::Default)
+                        .shape(ui::IconButtonShape::Square)
+                        .style(ButtonStyle::Outlined)
+                        .layer(ElevationIndex::ElevatedSurface)
+                        .tooltip(Tooltip::for_action_title(
+                            "Scroll to Bottom",
+                            &ScrollOutputToBottom,
+                        ))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.scroll_to_end(cx);
+                            this.list_state.set_follow_mode(gpui::FollowMode::Tail);
+                        })),
+                ),
+            )
     }
 
     fn render_approval_selector(&self, cx: &Context<Self>) -> Option<AnyElement> {
@@ -14497,6 +14502,8 @@ impl Render for ThreadView {
 
         let has_messages = self.list_state.item_count() > 0;
         let list_state = self.list_state.clone();
+        let show_scroll_to_bottom =
+            !self.is_subagent() && has_messages && !self.list_state.is_following_tail();
 
         let conversation = v_flex()
             .flex_1()
@@ -14856,6 +14863,9 @@ impl Render for ThreadView {
                 |this, bar| this.child(bar),
             )
             .child(conversation)
+            .when(show_scroll_to_bottom, |this| {
+                this.child(self.render_scroll_to_bottom_button(cx))
+            })
             .children(self.render_multi_root_callout(cx))
             .children(self.render_activity_bar(window, cx))
             .when_some(

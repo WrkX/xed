@@ -61,6 +61,7 @@ jobs:
         path: target/release/zed-linux-x86_64.tar.gz
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
       continue-on-error: true
     - id: upload_zed_linux_x86_64_tar_gz_attempt2
       name: steps::upload_artifact (zed-linux-x86_64.tar.gz)
@@ -71,6 +72,7 @@ jobs:
         path: target/release/zed-linux-x86_64.tar.gz
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
     - id: upload_zed_remote_server_linux_x86_64_gz_attempt1
       name: steps::upload_artifact (zed-remote-server-linux-x86_64.gz)
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -79,6 +81,7 @@ jobs:
         path: target/zed-remote-server-linux-x86_64.gz
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
       continue-on-error: true
     - id: upload_zed_remote_server_linux_x86_64_gz_attempt2
       name: steps::upload_artifact (zed-remote-server-linux-x86_64.gz)
@@ -89,6 +92,7 @@ jobs:
         path: target/zed-remote-server-linux-x86_64.gz
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
     timeout-minutes: 360
   bundle_linux_aarch64:
     runs-on: ubuntu-24.04-arm
@@ -137,6 +141,7 @@ jobs:
         path: target/release/zed-linux-aarch64.tar.gz
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
       continue-on-error: true
     - id: upload_zed_linux_aarch64_tar_gz_attempt2
       name: steps::upload_artifact (zed-linux-aarch64.tar.gz)
@@ -147,6 +152,7 @@ jobs:
         path: target/release/zed-linux-aarch64.tar.gz
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
     - id: upload_zed_remote_server_linux_aarch64_gz_attempt1
       name: steps::upload_artifact (zed-remote-server-linux-aarch64.gz)
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -155,6 +161,7 @@ jobs:
         path: target/zed-remote-server-linux-aarch64.gz
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
       continue-on-error: true
     - id: upload_zed_remote_server_linux_aarch64_gz_attempt2
       name: steps::upload_artifact (zed-remote-server-linux-aarch64.gz)
@@ -165,6 +172,7 @@ jobs:
         path: target/zed-remote-server-linux-aarch64.gz
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
     timeout-minutes: 360
   bundle_windows_x86_64:
     runs-on: windows-latest
@@ -214,6 +222,7 @@ jobs:
         path: target/Zed-x86_64.exe
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
       continue-on-error: true
     - id: upload_Zed_x86_64_exe_attempt2
       name: steps::upload_artifact (Zed-x86_64.exe)
@@ -224,6 +233,7 @@ jobs:
         path: target/Zed-x86_64.exe
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
     - id: upload_zed_remote_server_windows_x86_64_zip_attempt1
       name: steps::upload_artifact (zed-remote-server-windows-x86_64.zip)
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -232,6 +242,7 @@ jobs:
         path: target/zed-remote-server-windows-x86_64.zip
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
       continue-on-error: true
     - id: upload_zed_remote_server_windows_x86_64_zip_attempt2
       name: steps::upload_artifact (zed-remote-server-windows-x86_64.zip)
@@ -242,6 +253,7 @@ jobs:
         path: target/zed-remote-server-windows-x86_64.zip
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
     timeout-minutes: 360
   bundle_windows_aarch64:
     runs-on: windows-latest
@@ -291,6 +303,7 @@ jobs:
         path: target/Zed-aarch64.exe
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
       continue-on-error: true
     - id: upload_Zed_aarch64_exe_attempt2
       name: steps::upload_artifact (Zed-aarch64.exe)
@@ -301,6 +314,7 @@ jobs:
         path: target/Zed-aarch64.exe
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
     - id: upload_zed_remote_server_windows_aarch64_zip_attempt1
       name: steps::upload_artifact (zed-remote-server-windows-aarch64.zip)
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -309,6 +323,7 @@ jobs:
         path: target/zed-remote-server-windows-aarch64.zip
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
       continue-on-error: true
     - id: upload_zed_remote_server_windows_aarch64_zip_attempt2
       name: steps::upload_artifact (zed-remote-server-windows-aarch64.zip)
@@ -319,6 +334,106 @@ jobs:
         path: target/zed-remote-server-windows-aarch64.zip
         if-no-files-found: error
         overwrite: true
+        retention-days: '1'
+    timeout-minutes: 360
+  bundle_mac_aarch64:
+    runs-on: macos-latest
+    env:
+      CARGO_INCREMENTAL: 0
+      ZED_CLIENT_CHECKSUM_SEED: ${{ secrets.ZED_CLIENT_CHECKSUM_SEED }}
+      ZED_MINIDUMP_ENDPOINT: ${{ secrets.ZED_SENTRY_MINIDUMP_ENDPOINT }}
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      APPLE_NOTARIZATION_KEY: ${{ secrets.APPLE_NOTARIZATION_KEY }}
+      APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+      APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+    steps:
+    - name: steps::checkout_repo
+      uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      with:
+        clean: false
+    - name: steps::cache_rust_dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.rustup
+        key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
+    - name: run_bundling::set_release_channel_to_dev
+      run: |
+        set -eu
+        version=$(git rev-parse --short HEAD)
+        echo "Publishing version: ${version} on release channel dev"
+        echo "dev" > crates/zed/RELEASE_CHANNEL
+    - name: steps::setup_node
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      with:
+        node-version: '24'
+        check-latest: true
+        package-manager-cache: false
+    - name: steps::setup_sentry
+      uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b
+      with:
+        token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+    - name: steps::clear_target_dir_if_large
+      run: ./script/clear-target-dir-if-larger-than 350 200
+    - name: run_bundling::bundle_mac::print_macos_toolchain
+      run: |
+        sw_vers
+        xcode-select -p
+        xcodebuild -version
+        xcrun --sdk macosx --show-sdk-version
+        xcrun --sdk macosx --show-sdk-path
+        xcrun clang --version
+        printf 'DEVELOPER_DIR=%s\n' "${DEVELOPER_DIR-<unset>}"
+        printf 'SDKROOT=%s\n' "${SDKROOT-<unset>}"
+        printf 'MACOSX_DEPLOYMENT_TARGET=%s\n' "${MACOSX_DEPLOYMENT_TARGET-<unset>}"
+    - name: steps::install_cmake
+      run: command -v cmake >/dev/null 2>&1 || ./script/install-cmake
+    - name: run_bundling::bundle_mac::bundle_mac
+      run: ./script/bundle-mac aarch64-apple-darwin
+    - id: upload_Zed_aarch64_dmg_attempt1
+      name: steps::upload_artifact (Zed-aarch64.dmg)
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: Zed-aarch64.dmg
+        path: target/aarch64-apple-darwin/release/Zed-aarch64.dmg
+        if-no-files-found: error
+        overwrite: true
+        retention-days: '1'
+      continue-on-error: true
+    - id: upload_Zed_aarch64_dmg_attempt2
+      name: steps::upload_artifact (Zed-aarch64.dmg)
+      if: steps.upload_Zed_aarch64_dmg_attempt1.outcome == 'failure'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: Zed-aarch64.dmg
+        path: target/aarch64-apple-darwin/release/Zed-aarch64.dmg
+        if-no-files-found: error
+        overwrite: true
+        retention-days: '1'
+    - id: upload_zed_remote_server_macos_aarch64_gz_attempt1
+      name: steps::upload_artifact (zed-remote-server-macos-aarch64.gz)
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: zed-remote-server-macos-aarch64.gz
+        path: target/zed-remote-server-macos-aarch64.gz
+        if-no-files-found: error
+        overwrite: true
+        retention-days: '1'
+      continue-on-error: true
+    - id: upload_zed_remote_server_macos_aarch64_gz_attempt2
+      name: steps::upload_artifact (zed-remote-server-macos-aarch64.gz)
+      if: steps.upload_zed_remote_server_macos_aarch64_gz_attempt1.outcome == 'failure'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: zed-remote-server-macos-aarch64.gz
+        path: target/zed-remote-server-macos-aarch64.gz
+        if-no-files-found: error
+        overwrite: true
+        retention-days: '1'
     timeout-minutes: 360
   publish_release:
     needs:
@@ -326,6 +441,7 @@ jobs:
     - bundle_linux_aarch64
     - bundle_windows_x86_64
     - bundle_windows_aarch64
+    - bundle_mac_aarch64
     if: '!cancelled()'
     runs-on: ubuntu-latest
     permissions:
@@ -360,6 +476,20 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GH_REPO: ${{ github.repository }}
         TAG: ${{ inputs.tag }}
+  trigger_remote_server:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+    - name: release_dev::trigger_remote_server
+      run: |
+        gh workflow run remote-server.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$GITHUB_REF_NAME" \
+            -f ref="$GITHUB_SHA"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 concurrency:
   group: release-dev
   cancel-in-progress: true

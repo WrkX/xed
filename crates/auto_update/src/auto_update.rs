@@ -48,6 +48,12 @@ const POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const NIGHTLY_POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
 const REMOTE_SERVER_CACHE_LIMIT: usize = 5;
 
+/// This fork publishes prebuilt Linux development remote servers as GitHub
+/// release assets, one release per commit, so dev builds can download them
+/// instead of compiling them from a local checkout.
+const FORK_REMOTE_SERVER_GITHUB_REPO: &str = "WrkX/xed";
+const FORK_REMOTE_SERVER_RELEASE_TAG_PREFIX: &str = "remote-server-";
+
 #[cfg(target_os = "linux")]
 fn linux_rsync_install_hint() -> &'static str {
     let os_release = match std::fs::read_to_string("/etc/os-release") {
@@ -683,6 +689,21 @@ impl AutoUpdater {
         arch: &str,
         cx: &mut AsyncApp,
     ) -> Result<ReleaseAsset> {
+        if release_channel == ReleaseChannel::Dev
+            && asset == "zed-remote-server"
+            && os == "linux"
+            && let Some(commit_sha) = cx.update(|cx| AppCommitSha::try_global(cx))
+        {
+            let commit_sha = commit_sha.full();
+            let url = format!(
+                "https://github.com/{FORK_REMOTE_SERVER_GITHUB_REPO}/releases/download/{FORK_REMOTE_SERVER_RELEASE_TAG_PREFIX}{commit_sha}/zed-remote-server-{os}-{arch}.gz"
+            );
+            return Ok(ReleaseAsset {
+                version: commit_sha,
+                url,
+            });
+        }
+
         let client = this.read_with(cx, |this, _| this.client.clone());
 
         let (system_id, metrics_id, is_staff) = if client.telemetry().metrics_enabled() {

@@ -1,7 +1,7 @@
 use super::{runners, steps, steps::named, vars};
 use crate::tasks::workflows::{
     release::download_workflow_artifacts,
-    run_bundling::{bundle_linux, bundle_windows},
+    run_bundling::{bundle_linux, bundle_mac, bundle_windows},
     runners::{Arch, ReleaseChannel},
     steps::{CommonPermissionSets, FluentBuilder, NamedJob, dependant_job},
     vars::WorkflowInput,
@@ -15,8 +15,9 @@ const DEV_RELEASE_TAG: &str = "dev";
 
 /// Generates the release_dev.yml workflow.
 ///
-/// Builds the `dev` channel for Linux and Windows and attaches the resulting
-/// artifacts to a rolling GitHub prerelease. The workflow depends on no other
+/// Builds the `dev` channel for Linux, Windows, and macOS and attaches the
+/// resulting artifacts to a rolling GitHub prerelease. It also dispatches the
+/// remote-server workflow for the same commit. The workflow depends on no other
 /// workflow, so unrelated CI failures cannot block a dev build.
 ///
 /// The publish job runs even if some (or all) of the bundles fail, so that
@@ -29,13 +30,15 @@ pub fn release_dev() -> Workflow {
     const DEV: Option<ReleaseChannel> = Some(ReleaseChannel::Dev);
 
     let bundles = vec![
-        bundle_linux(Arch::X86_64, DEV, false, &[]),
-        bundle_linux(Arch::AARCH64, DEV, false, &[]),
-        bundle_windows(Arch::X86_64, DEV, &[]),
-        bundle_windows(Arch::AARCH64, DEV, &[]),
+        bundle_linux(Arch::X86_64, DEV, false, &[], Some(1)),
+        bundle_linux(Arch::AARCH64, DEV, false, &[], Some(1)),
+        bundle_windows(Arch::X86_64, DEV, &[], Some(1)),
+        bundle_windows(Arch::AARCH64, DEV, &[], Some(1)),
+        bundle_mac(Arch::AARCH64, DEV, &[], Some(1)),
     ];
 
     let publish = publish_release(&bundles.iter().collect::<Vec<_>>(), &tag);
+    let trigger_remote_server = trigger_remote_server();
 
     named::workflow()
         .with_minimal_permissions()
@@ -55,6 +58,29 @@ pub fn release_dev() -> Workflow {
             workflow
         })
         .add_job(publish.name, publish.job)
+        .add_job(trigger_remote_server.name, trigger_remote_server.job)
+}
+
+fn trigger_remote_server() -> NamedJob {
+    NamedJob {
+        name: "trigger_remote_server".to_owned(),
+        job: dependant_job(&[])
+            .runs_on(runners::LINUX_SMALL)
+            .permissions(
+                Permissions::default()
+                    .contents(Level::Read)
+                    .actions(Level::Write),
+            )
+            .add_step(
+                named::bash(indoc! {r#"
+                    gh workflow run remote-server.yml \
+                        --repo "$GITHUB_REPOSITORY" \
+                        --ref "$GITHUB_REF_NAME" \
+                        -f ref="$GITHUB_SHA"
+                "#})
+                .add_env(("GH_TOKEN", vars::GITHUB_TOKEN)),
+            ),
+    }
 }
 
 fn publish_release(bundles: &[&NamedJob], tag: &WorkflowInput) -> NamedJob {

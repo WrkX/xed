@@ -35,12 +35,14 @@ pub(crate) fn release() -> Workflow {
             None,
             true,
             &[&linux_tests, &linux_clippy, &check_scripts],
+            None,
         ),
         linux_x86_64: bundle_linux(
             Arch::X86_64,
             None,
             true,
             &[&linux_tests, &linux_clippy, &check_scripts],
+            None,
         ),
         bwrap_linux_aarch64: build_static_bwrap(
             Arch::AARCH64,
@@ -54,21 +56,25 @@ pub(crate) fn release() -> Workflow {
             Arch::AARCH64,
             None,
             &[&macos_tests, &macos_clippy, &check_scripts],
+            None,
         ),
         mac_x86_64: bundle_mac(
             Arch::X86_64,
             None,
             &[&macos_tests, &macos_clippy, &check_scripts],
+            None,
         ),
         windows_aarch64: bundle_windows(
             Arch::AARCH64,
             None,
             &[&windows_tests, &windows_clippy, &check_scripts],
+            None,
         ),
         windows_x86_64: bundle_windows(
             Arch::X86_64,
             None,
             &[&windows_tests, &windows_clippy, &check_scripts],
+            None,
         ),
     };
 

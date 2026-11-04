@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use collections::HashMap;
 use futures::channel::mpsc::{Sender, UnboundedReceiver, UnboundedSender};
 use gpui::{App, AppContext as _, AsyncApp, Task};
-use release_channel::{AppVersion, ReleaseChannel};
+use release_channel::{AppCommitSha, AppVersion, ReleaseChannel};
 use rpc::proto::Envelope;
 use semver::Version;
 use smol::{
@@ -220,7 +220,10 @@ impl WslRemoteConnection {
         cx: &mut AsyncApp,
     ) -> Result<Arc<RelPath>> {
         let version_str = match release_channel {
-            ReleaseChannel::Dev => "build".to_string(),
+            ReleaseChannel::Dev => cx
+                .update(|cx| AppCommitSha::try_global(cx))
+                .map(|commit_sha| commit_sha.short())
+                .unwrap_or_else(|| "build".to_string()),
             _ => version.to_string(),
         };
 
