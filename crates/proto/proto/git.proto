@@ -206,6 +206,12 @@ message GitChangeBranch {
   string branch_name = 4;
 }
 
+message GitRebase {
+  uint64 project_id = 1;
+  uint64 repository_id = 2;
+  string onto = 3;
+}
+
 message GitRenameBranch {
   uint64 project_id = 1;
   uint64 repository_id = 2;

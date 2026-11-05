@@ -10,7 +10,10 @@ pub const LINUX_XL: Runner = Runner("ubuntu-latest");
 pub const LINUX_LARGE: Runner = Runner("ubuntu-latest");
 pub const LINUX_MEDIUM: Runner = Runner("ubuntu-latest");
 
-pub const LINUX_X86_BUNDLER: Runner = Runner("ubuntu-latest");
+// `bundle_linux` pins clang-18 and lld-18, which are not available on the
+// Ubuntu 26.04 image behind `ubuntu-latest`. Pin to 24.04 to match the arm64
+// bundler and keep that toolchain available.
+pub const LINUX_X86_BUNDLER: Runner = Runner("ubuntu-24.04");
 // `bundle-linux` cross-compiles nothing: it builds for the host architecture
 // and names the archive after `uname -m`, so the aarch64 bundle must run on an
 // arm64 runner to produce an aarch64 artifact.

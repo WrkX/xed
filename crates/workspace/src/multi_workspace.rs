@@ -1,5 +1,6 @@
 use anyhow::{Context as _, Result};
 use fs::Fs;
+use futures::channel::oneshot;
 
 use gpui::{
     AnyView, App, Context, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
@@ -28,7 +29,7 @@ const SIDEBAR_RESIZE_HANDLE_SIZE: Pixels = px(6.0);
 use crate::open_remote_project_with_existing_connection;
 use crate::{
     CloseIntent, CloseWindow, DockPosition, Event as WorkspaceEvent, Item, ModalView, OpenMode,
-    Panel, Workspace, WorkspaceId, client_side_decorations,
+    Panel, QuitModal, Workspace, WorkspaceId, WorkspaceSettings, client_side_decorations,
     persistence::model::MultiWorkspaceState,
 };
 
@@ -557,7 +558,30 @@ impl MultiWorkspace {
             log::error!("cannot close a window whose root is not a MultiWorkspace");
             return;
         };
+
+        let confirmation = if should_confirm_quit_on_close(cx) {
+            if self
+                .workspace()
+                .read(cx)
+                .active_modal::<QuitModal>(cx)
+                .is_some()
+            {
+                return;
+            }
+            let (response_tx, response_rx) = oneshot::channel();
+            self.toggle_modal(window, cx, |_, cx| QuitModal::new(response_tx, cx));
+            Some(response_rx)
+        } else {
+            None
+        };
+
         cx.spawn(async move |_, cx| {
+            if let Some(confirmation) = confirmation
+                && confirmation.await.ok() != Some(true)
+            {
+                return anyhow::Ok(());
+            }
+
             if !crate::prepare_window_to_close(window_handle, CloseIntent::CloseWindow, cx)
                 .await
                 .context("preparing the window to close")?
@@ -2197,4 +2221,8 @@ impl Render for MultiWorkspace {
             cx,
         )
     }
+}
+
+fn should_confirm_quit_on_close(cx: &App) -> bool {
+    WorkspaceSettings::get_global(cx).confirm_quit && cx.windows().len() == 1
 }

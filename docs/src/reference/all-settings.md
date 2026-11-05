@@ -716,7 +716,7 @@ Disabling this setting does not erase history.
 
 - Description: Whether or not to prompt the user to confirm before closing the application.
 - Setting: `confirm_quit`
-- Default: `false`
+- Default: `true`
 
 **Options**
 

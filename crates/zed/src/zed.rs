@@ -30,7 +30,7 @@ use extension_host::ExtensionStore;
 use feature_flags::{FeatureFlagAppExt as _, PanicFeatureFlag};
 use fs::Fs;
 use futures::FutureExt as _;
-use futures::{StreamExt, channel::mpsc, select_biased};
+use futures::{StreamExt, channel::mpsc, channel::oneshot, select_biased};
 use git_ui::branch_diff::BranchDiffToolbar;
 use git_ui::commit_view::CommitViewToolbar;
 use git_ui::git_panel::GitPanel;
@@ -99,7 +99,7 @@ use vim_mode_setting::VimModeSetting;
 use workspace::notifications::{NotificationId, dismiss_app_notification, show_app_notification};
 
 use workspace::{
-    AppState, MultiWorkspace, NewFile, NewWindow, OpenLog, Panel, Toast, Workspace,
+    AppState, MultiWorkspace, NewFile, NewWindow, OpenLog, Panel, QuitModal, Toast, Workspace,
     WorkspaceSettings, create_and_open_local_file,
     notifications::simple_message_notification::MessageNotification, open_new,
 };
@@ -1752,45 +1752,50 @@ fn install_cli(
 
 static WAITING_QUIT_CONFIRMATION: AtomicBool = AtomicBool::new(false);
 fn quit(_: &Quit, cx: &mut App) {
-    if WAITING_QUIT_CONFIRMATION.load(atomic::Ordering::Acquire) {
+    let should_confirm = WorkspaceSettings::get_global(cx).confirm_quit;
+    let mut workspace_windows: Vec<WindowHandle<MultiWorkspace>> = cx
+        .windows()
+        .into_iter()
+        .filter_map(|window| window.downcast::<MultiWorkspace>())
+        .collect();
+
+    // If multiple windows have unsaved changes, and need a save prompt,
+    // prompt in the active window before switching to a different window.
+    workspace_windows.sort_by_key(|window| window.is_active(cx) == Some(false));
+
+    let awaiting_confirmation = should_confirm && !workspace_windows.is_empty();
+    if awaiting_confirmation && WAITING_QUIT_CONFIRMATION.swap(true, atomic::Ordering::AcqRel) {
         return;
     }
 
-    let should_confirm = WorkspaceSettings::get_global(cx).confirm_quit;
     cx.spawn(async move |cx| {
-        let mut workspace_windows: Vec<WindowHandle<MultiWorkspace>> = cx.update(|cx| {
-            cx.windows()
-                .into_iter()
-                .filter_map(|window| window.downcast::<MultiWorkspace>())
-                .collect::<Vec<_>>()
-        });
+        if awaiting_confirmation {
+            let confirmation = workspace_windows.first().and_then(|multi_workspace| {
+                multi_workspace
+                    .update(cx, |multi_workspace, window, cx| {
+                        let workspace = multi_workspace.workspace().clone();
+                        if workspace.read(cx).active_modal::<QuitModal>(cx).is_some() {
+                            return None;
+                        }
 
-        // If multiple windows have unsaved changes, and need a save prompt,
-        // prompt in the active window before switching to a different window.
-        cx.update(|cx| {
-            workspace_windows.sort_by_key(|window| window.is_active(cx) == Some(false));
-        });
+                        let (response_tx, response_rx) = oneshot::channel();
+                        workspace.update(cx, |workspace, cx| {
+                            workspace
+                                .toggle_modal(window, cx, |_, cx| QuitModal::new(response_tx, cx));
+                        });
+                        Some(response_rx)
+                    })
+                    .log_err()
+                    .flatten()
+            });
 
-        if should_confirm && let Some(multi_workspace) = workspace_windows.first() {
-            let answer = multi_workspace
-                .update(cx, |_, window, cx| {
-                    window.prompt(
-                        PromptLevel::Info,
-                        "Are you sure you want to quit?",
-                        None,
-                        &["Quit", "Cancel"],
-                        cx,
-                    )
-                })
-                .log_err();
-
-            if let Some(answer) = answer {
-                WAITING_QUIT_CONFIRMATION.store(true, atomic::Ordering::Release);
-                let answer = answer.await.ok();
-                WAITING_QUIT_CONFIRMATION.store(false, atomic::Ordering::Release);
-                if answer != Some(0) {
-                    return Ok(());
-                }
+            let confirmed = match confirmation {
+                Some(confirmation) => confirmation.await.ok() == Some(true),
+                None => false,
+            };
+            WAITING_QUIT_CONFIRMATION.store(false, atomic::Ordering::Release);
+            if !confirmed {
+                return Ok(());
             }
         }
 
@@ -7685,6 +7690,121 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    async fn test_quit_action_shows_confirmation_modal(cx: &mut TestAppContext) {
+        use workspace::OpenMode;
+
+        let app_state = init_test(cx);
+        cx.update(init);
+        cx.update(|cx| {
+            cx.update_global::<SettingsStore, _>(|store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.workspace.confirm_quit = Some(true);
+                });
+            });
+        });
+
+        let dir = path!("/quit-action");
+        app_state.fs.as_fake().insert_tree(dir, json!({})).await;
+
+        let workspace::OpenResult { window, .. } = cx
+            .update(|cx| {
+                Workspace::new_local(
+                    vec![dir.into()],
+                    app_state.clone(),
+                    None,
+                    None,
+                    None,
+                    OpenMode::Activate,
+                    cx,
+                )
+            })
+            .await
+            .expect("failed to open workspace");
+        cx.run_until_parked();
+
+        cx.dispatch_action(*window, Quit);
+        cx.run_until_parked();
+
+        window
+            .read_with(cx, |multi_workspace, cx| {
+                assert!(
+                    multi_workspace
+                        .workspace()
+                        .read(cx)
+                        .active_modal::<QuitModal>(cx)
+                        .is_some(),
+                    "the Quit action should show the confirmation modal"
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn test_closing_last_window_shows_quit_confirmation(cx: &mut TestAppContext) {
+        use workspace::OpenMode;
+
+        let app_state = init_test(cx);
+        cx.update(init);
+        cx.update(|cx| {
+            cx.update_global::<SettingsStore, _>(|store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.workspace.confirm_quit = Some(true);
+                });
+            });
+        });
+
+        let dir = path!("/close-quit-confirmation");
+        app_state.fs.as_fake().insert_tree(dir, json!({})).await;
+
+        let workspace::OpenResult { window, .. } = cx
+            .update(|cx| {
+                Workspace::new_local(
+                    vec![dir.into()],
+                    app_state.clone(),
+                    None,
+                    None,
+                    None,
+                    OpenMode::Activate,
+                    cx,
+                )
+            })
+            .await
+            .expect("failed to open workspace");
+        cx.run_until_parked();
+
+        let any_window = window.into();
+        let mut visual_cx = VisualTestContext::from_window(any_window, cx);
+        assert!(
+            !visual_cx.simulate_close(),
+            "the window close should be deferred until the confirmation is answered"
+        );
+        visual_cx.run_until_parked();
+
+        let window = any_window.downcast::<MultiWorkspace>().unwrap();
+        window
+            .read_with(&visual_cx, |multi_workspace, cx| {
+                assert!(
+                    multi_workspace
+                        .workspace()
+                        .read(cx)
+                        .active_modal::<QuitModal>(cx)
+                        .is_some(),
+                    "closing the last window should confirm before quitting"
+                );
+            })
+            .unwrap();
+
+        visual_cx.dispatch_action(menu::Cancel);
+        visual_cx.run_until_parked();
+
+        assert_eq!(
+            visual_cx.cx.windows().len(),
+            1,
+            "cancelling should keep the window open"
+        );
     }
 
     #[gpui::test]

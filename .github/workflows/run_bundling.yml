@@ -89,7 +89,7 @@ jobs:
     if: |-
       (github.event.action == 'labeled' && github.event.label.name == 'run-bundling') ||
       (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'run-bundling'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       CARGO_INCREMENTAL: 0
       ZED_CLIENT_CHECKSUM_SEED: ${{ secrets.ZED_CLIENT_CHECKSUM_SEED }}
@@ -196,7 +196,7 @@ jobs:
     if: |-
       (github.event.action == 'labeled' && github.event.label.name == 'run-bundling') ||
       (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'run-bundling'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
     - name: steps::cache_nix_dependencies_namespace
       uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9

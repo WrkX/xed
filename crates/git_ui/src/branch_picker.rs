@@ -68,6 +68,52 @@ pub fn switch(
     open(workspace, &zed_actions::git::Branch, window, cx);
 }
 
+pub fn rebase(
+    workspace: &mut Workspace,
+    _: &git::RebaseBranch,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    let Some(repository) = workspace.project().read(cx).active_repository(cx) else {
+        return;
+    };
+
+    let workspace_handle = workspace.weak_handle();
+    let repository_for_picker = repository.clone();
+    let on_select = Arc::new({
+        let workspace_handle = workspace_handle.clone();
+        move |branch: Branch, window: &mut Window, cx: &mut App| {
+            let onto = branch.name().to_string();
+            let rebase = repository.update(cx, |repository, _| repository.rebase(onto));
+            let workspace_handle = workspace_handle.clone();
+            window
+                .spawn(cx, async move |cx| {
+                    let result = rebase.await?;
+                    if let Err(error) = result
+                        && let Some(workspace) = workspace_handle.upgrade()
+                    {
+                        cx.update(|_window, cx| show_error_toast(workspace, "rebase", error, cx))
+                            .log_err();
+                    }
+                    anyhow::Ok(())
+                })
+                .detach_and_log_err(cx);
+        }
+    });
+
+    workspace.toggle_modal(window, cx, |window, cx| {
+        select_modal_with_placeholder(
+            workspace_handle,
+            Some(repository_for_picker),
+            None,
+            "Select a branch to rebase onto".into(),
+            on_select,
+            window,
+            cx,
+        )
+    });
+}
+
 pub fn open(
     workspace: &mut Workspace,
     _: &zed_actions::git::Branch,
@@ -124,6 +170,7 @@ pub fn select_popover(
             BranchListStyle::Popover,
             rems(20.),
             selected_branch,
+            "Switch or type to create a branch…".into(),
             on_select,
             window,
             cx,
@@ -141,12 +188,33 @@ pub fn select_modal(
     window: &mut Window,
     cx: &mut Context<BranchList>,
 ) -> BranchList {
+    select_modal_with_placeholder(
+        workspace,
+        repository,
+        selected_branch,
+        "Switch or type to create a branch…".into(),
+        on_select,
+        window,
+        cx,
+    )
+}
+
+pub fn select_modal_with_placeholder(
+    workspace: WeakEntity<Workspace>,
+    repository: Option<Entity<Repository>>,
+    selected_branch: Option<SharedString>,
+    placeholder: SharedString,
+    on_select: SelectBranchCallback,
+    window: &mut Window,
+    cx: &mut Context<BranchList>,
+) -> BranchList {
     let list = BranchList::new_select(
         workspace,
         repository,
         BranchListStyle::Modal,
         rems(34.),
         selected_branch,
+        placeholder,
         on_select,
         window,
         cx,
@@ -227,6 +295,7 @@ impl BranchList {
         style: BranchListStyle,
         width: Rems,
         selected_branch: Option<SharedString>,
+        placeholder: SharedString,
         on_select: SelectBranchCallback,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -239,6 +308,7 @@ impl BranchList {
             false,
             BranchSelectionBehavior::Select {
                 selected_branch,
+                placeholder,
                 on_select,
             },
             window,
@@ -682,6 +752,7 @@ enum BranchSelectionBehavior {
     Checkout,
     Select {
         selected_branch: Option<SharedString>,
+        placeholder: SharedString,
         on_select: SelectBranchCallback,
     },
 }
@@ -1258,11 +1329,17 @@ impl PickerDelegate for BranchListDelegate {
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
         match self.state {
             PickerState::List | PickerState::NewRemote | PickerState::NewBranch => {
-                "Switch or type to create a branch…"
+                match &self.branch_selection_behavior {
+                    BranchSelectionBehavior::Checkout => {
+                        "Switch or type to create a branch…".into()
+                    }
+                    BranchSelectionBehavior::Select { placeholder, .. } => {
+                        placeholder.clone().into()
+                    }
+                }
             }
-            PickerState::CreateRemote(_) => "Enter a name for this remote…",
+            PickerState::CreateRemote(_) => "Enter a name for this remote…".into(),
         }
-        .into()
     }
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
@@ -3136,6 +3213,7 @@ mod tests {
                         BranchListStyle::Modal,
                         rems(34.),
                         Some("main".into()),
+                        "Switch or type to create a branch…".into(),
                         Arc::new(|_: Branch, _: &mut Window, _: &mut App| {}),
                         window,
                         cx,

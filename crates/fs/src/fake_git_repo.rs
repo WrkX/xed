@@ -1047,6 +1047,13 @@ impl GitRepository for FakeGitRepository {
         })
     }
 
+    fn rebase(&self, onto: String) -> BoxFuture<'_, Result<()>> {
+        self.with_state_async(true, move |state| {
+            anyhow::ensure!(state.branches.contains(&onto), "no such branch: {onto}");
+            Ok(())
+        })
+    }
+
     fn create_branch(
         &self,
         name: String,

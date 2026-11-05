@@ -467,7 +467,7 @@ fn main() {
         if let Some(app_state) = AppState::try_global(cx) {
             cx.spawn({
                 async move |cx| {
-                    if let Err(e) = restore_or_create_workspace(app_state, cx).await {
+                    if let Err(e) = open_welcome_workspace(app_state, cx).await {
                         fail_to_open_window_async(e, cx)
                     }
                 }
@@ -932,7 +932,7 @@ fn main() {
             Some(request) if request.is_focus_app_only() => cx.spawn({
                 let app_state = app_state.clone();
                 async move |cx| {
-                    if let Err(e) = restore_or_create_workspace(app_state, cx).await {
+                    if let Err(e) = open_welcome_workspace(app_state, cx).await {
                         fail_to_open_window_async(e, cx)
                     }
                 }
@@ -944,7 +944,7 @@ fn main() {
             None => cx.spawn({
                 let app_state = app_state.clone();
                 async move |cx| {
-                    if let Err(e) = restore_or_create_workspace(app_state, cx).await {
+                    if let Err(e) = open_welcome_workspace(app_state, cx).await {
                         fail_to_open_window_async(e, cx)
                     }
                 }
@@ -1015,7 +1015,7 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                     if workspace::activate_any_workspace_window(cx).is_some() {
                         return anyhow::Ok(());
                     }
-                    restore_or_create_workspace(app_state, cx).await
+                    open_welcome_workspace(app_state, cx).await
                 })
                 .detach_and_log_err(cx);
             }
@@ -1417,6 +1417,27 @@ async fn installation_id(db: KeyValueStore) -> Result<IdType> {
     db.write_kvp(key_name, installation_id.clone()).await?;
 
     Ok(IdType::New(installation_id))
+}
+
+/// Opens a fresh welcome window instead of restoring the previous session.
+///
+/// The welcome screen is the app's entry point; projects are opened explicitly
+/// from there or via the CLI.
+pub(crate) async fn open_welcome_workspace(
+    app_state: Arc<AppState>,
+    cx: &mut AsyncApp,
+) -> Result<()> {
+    let is_first_open =
+        cx.update(|cx| matches!(KeyValueStore::global(cx).read_kvp(FIRST_OPEN), Ok(None)));
+
+    if is_first_open {
+        cx.update(|cx| show_onboarding_view(app_state, cx)).await?;
+    } else {
+        cx.update(|cx| workspace::open_new(Default::default(), app_state, cx, |_, _, _| {}))
+            .await?;
+    }
+
+    Ok(())
 }
 
 pub(crate) async fn restore_or_create_workspace(

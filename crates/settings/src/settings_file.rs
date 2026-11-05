@@ -134,6 +134,7 @@ pub fn test_settings() -> &'static str {
         util::merge_non_null_json_value_into(
             serde_json::json!({
                 "format_on_save": "on",
+                "confirm_quit": false,
                 "ui_font_family": "Courier",
                 "ui_font_features": {},
                 "ui_font_size": 14,
@@ -150,6 +151,7 @@ pub fn test_settings() -> &'static str {
         util::merge_non_null_json_value_into(
             serde_json::json!({
                 "format_on_save": "on",
+                "confirm_quit": false,
                 "ui_font_family": "Courier New",
                 "ui_font_features": {},
                 "ui_font_size": 14,

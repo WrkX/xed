@@ -39,7 +39,7 @@ pub struct WorkspaceSettingsContent {
     pub centered_layout: Option<CenteredLayoutSettings>,
     /// Whether or not to prompt the user to confirm before closing the application.
     ///
-    /// Default: false
+    /// Default: true
     pub confirm_quit: Option<bool>,
     /// Whether or not to show the call status icon in the status bar.
     ///

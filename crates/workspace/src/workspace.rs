@@ -15,6 +15,7 @@ pub mod path_list {
 }
 pub mod path_link;
 mod persistence;
+pub mod quit_modal;
 pub mod searchable;
 pub mod security_modal;
 pub mod shared_screen;
@@ -38,6 +39,7 @@ pub use multi_workspace::{
     SidebarRenderState, SidebarSide, ToggleWorkspaceSidebar, sidebar_side_context_menu,
 };
 pub use path_list::{PathList, SerializedPathList};
+pub use quit_modal::QuitModal;
 pub use remote::{
     RemoteConnectionIdentity, remote_connection_identity, same_remote_connection_identity,
 };
@@ -2368,14 +2370,6 @@ impl Workspace {
                 };
 
             notify_if_database_failed(window, cx);
-            // Check if this is an empty workspace (no paths to open)
-            // An empty workspace is one where project_paths is empty
-            let is_empty_workspace = project_paths.is_empty();
-            // Check if serialized workspace has paths before it's moved
-            let serialized_workspace_has_paths = serialized_workspace
-                .as_ref()
-                .map(|ws| !ws.paths.is_empty())
-                .unwrap_or(false);
 
             let opened_items = window
                 .update(cx, |_, window, cx| {
@@ -2385,35 +2379,6 @@ impl Workspace {
                 })?
                 .await
                 .unwrap_or_default();
-
-            // Restore default dock state for empty workspaces
-            // Only restore if:
-            // 1. This is an empty workspace (no paths), AND
-            // 2. The serialized workspace either doesn't exist or has no paths
-            if is_empty_workspace && !serialized_workspace_has_paths {
-                if let Some(default_docks) = persistence::read_default_dock_state(&kvp) {
-                    window
-                        .update(cx, |_, window, cx| {
-                            workspace.update(cx, |workspace, cx| {
-                                for (dock, serialized_dock) in [
-                                    (&workspace.right_dock, &default_docks.right),
-                                    (&workspace.left_dock, &default_docks.left),
-                                    (&workspace.bottom_dock, &default_docks.bottom),
-                                ] {
-                                    dock.update(cx, |dock, cx| {
-                                        dock.restore_serialized_state(
-                                            serialized_dock.clone(),
-                                            window,
-                                            cx,
-                                        );
-                                    });
-                                }
-                                cx.notify();
-                            });
-                        })
-                        .log_err();
-                }
-            }
 
             window
                 .update(cx, |_, _window, cx| {
@@ -7748,9 +7713,6 @@ impl Workspace {
 
                 let center_group = build_serialized_pane_group(&self.center.root, window, cx);
                 let docks = build_serialized_docks(self, window, cx);
-                let default_docks = (paths.is_empty()
-                    && location == SerializedWorkspaceLocation::Local)
-                    .then(|| docks.clone());
                 let window_bounds = Some(SerializedWindowBounds(window.window_bounds()));
                 let identity_paths_hint = self.project_group_key(cx).path_list().clone();
                 let recent_navigation_history = self.persisted_recent_navigation_history.clone();
@@ -7774,26 +7736,9 @@ impl Workspace {
                 };
 
                 let db = WorkspaceDb::global(cx);
-                let kvp = db::kvp::KeyValueStore::global(cx);
-                cx.background_spawn(async move {
-                    if let Some(docks) = default_docks {
-                        persistence::write_default_dock_state(&kvp, docks)
-                            .await
-                            .log_err();
-                    }
-                    db.save_workspace(serialized_workspace).await;
-                })
+                cx.background_spawn(async move { db.save_workspace(serialized_workspace).await })
             }
-            WorkspaceLocation::None => {
-                // Save dock state for empty non-local workspaces
-                let docks = build_serialized_docks(self, window, cx);
-                let kvp = db::kvp::KeyValueStore::global(cx);
-                cx.background_spawn(async move {
-                    persistence::write_default_dock_state(&kvp, docks)
-                        .await
-                        .log_err();
-                })
-            }
+            WorkspaceLocation::None => Task::ready(()),
         }
     }
 

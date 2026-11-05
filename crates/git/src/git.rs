@@ -113,6 +113,8 @@ actions!(
         Pull,
         /// Pulls changes from the remote repository with rebase.
         PullRebase,
+        /// Rebases the current branch onto another branch.
+        RebaseBranch,
         /// Fetches changes from the remote repository.
         Fetch,
         /// Fetches changes from a specific remote.

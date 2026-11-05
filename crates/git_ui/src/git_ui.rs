@@ -354,6 +354,7 @@ pub fn init(cx: &mut App) {
         workspace.register_action(|workspace, _: &git::RenameBranch, window, cx| {
             rename_current_branch(workspace, window, cx);
         });
+        workspace.register_action(crate::branch_picker::rebase);
         workspace.register_action(|workspace, _: &git::CreateTagAtHead, window, cx| {
             create_tag_at_head(workspace, window, cx);
         });

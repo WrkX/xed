@@ -1598,6 +1598,7 @@ impl GitStore {
         client.add_entity_request_handler(Self::handle_get_branches);
         client.add_entity_request_handler(Self::handle_get_default_branch);
         client.add_entity_request_handler(Self::handle_change_branch);
+        client.add_entity_request_handler(Self::handle_rebase);
         client.add_entity_request_handler(Self::handle_create_branch);
         client.add_entity_request_handler(Self::handle_rename_branch);
         client.add_entity_request_handler(Self::handle_create_remote);
@@ -5178,6 +5179,24 @@ impl GitStore {
         repository_handle
             .update(&mut cx, |repository_handle, _| {
                 repository_handle.change_branch(branch_name)
+            })
+            .await??;
+
+        Ok(proto::Ack {})
+    }
+
+    async fn handle_rebase(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::GitRebase>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let repository_id = RepositoryId::from_proto(envelope.payload.repository_id);
+        let repository_handle = Self::repository_for_request(&this, repository_id, &mut cx)?;
+        let onto = envelope.payload.onto;
+
+        repository_handle
+            .update(&mut cx, |repository_handle, _| {
+                repository_handle.rebase(onto)
             })
             .await??;
 
@@ -10702,6 +10721,32 @@ impl Repository {
                                 project_id: project_id.0,
                                 repository_id: id.to_proto(),
                                 branch_name,
+                            })
+                            .await?;
+
+                        Ok(())
+                    }
+                }
+            },
+        )
+    }
+
+    pub fn rebase(&mut self, onto: String) -> oneshot::Receiver<Result<()>> {
+        let id = self.id;
+        self.send_job(
+            "rebase",
+            Some(format!("git rebase {onto}").into()),
+            move |repo, _cx| async move {
+                match repo {
+                    RepositoryState::Local(LocalRepositoryState { backend, .. }) => {
+                        backend.rebase(onto).await
+                    }
+                    RepositoryState::Remote(RemoteRepositoryState { project_id, client }) => {
+                        client
+                            .request(proto::GitRebase {
+                                project_id: project_id.0,
+                                repository_id: id.to_proto(),
+                                onto,
                             })
                             .await?;
 

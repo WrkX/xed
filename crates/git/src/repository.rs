@@ -854,6 +854,7 @@ pub trait GitRepository: Send + Sync {
     fn branches(&self) -> BoxFuture<'_, Result<BranchesScanResult>>;
 
     fn change_branch(&self, name: String) -> BoxFuture<'_, Result<()>>;
+    fn rebase(&self, onto: String) -> BoxFuture<'_, Result<()>>;
     fn create_branch(&self, name: String, base_branch: Option<String>)
     -> BoxFuture<'_, Result<()>>;
     fn rename_branch(&self, branch: String, new_name: String) -> BoxFuture<'_, Result<()>>;
@@ -2417,6 +2418,17 @@ impl GitRepository for RealGitRepository {
                 }
 
                 anyhow::bail!("Branch '{}' not found", name);
+            })
+            .boxed()
+    }
+
+    fn rebase(&self, onto: String) -> BoxFuture<'_, Result<()>> {
+        let git_binary = self.git_binary_in_worktree();
+        self.executor
+            .spawn(async move {
+                let git_binary = git_binary?;
+                git_binary.run(&["rebase", &onto]).await?;
+                anyhow::Ok(())
             })
             .boxed()
     }
