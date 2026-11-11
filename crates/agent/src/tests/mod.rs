@@ -615,7 +615,7 @@ async fn test_system_prompt(cx: &mut TestAppContext) {
         system_message
     );
     assert!(
-        system_prompt.contains("## Fixing Diagnostics"),
+        system_prompt.contains("## Making Code Changes"),
         "unexpected system message: {:?}",
         system_message
     );
@@ -652,7 +652,7 @@ async fn test_system_prompt_without_tools(cx: &mut TestAppContext) {
         system_message
     );
     assert!(
-        !system_prompt.contains("## Fixing Diagnostics"),
+        !system_prompt.contains("## Making Code Changes"),
         "unexpected system message: {:?}",
         system_message
     );

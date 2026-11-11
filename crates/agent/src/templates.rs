@@ -113,7 +113,7 @@ mod tests {
         let rendered = template.render(&templates).unwrap();
         assert!(rendered.contains("You are the Zed coding agent"));
         assert!(rendered.contains("Today's Date: 2026-01-01"));
-        assert!(rendered.contains("## Fixing Diagnostics"));
+        assert!(rendered.contains("## Making Code Changes"));
         assert!(rendered.contains("test-model"));
     }
 
